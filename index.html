@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>世界一長いドミノ倒し</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@500;700;800&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <div id="app">
+    <canvas id="c"></canvas>
+    <div id="vignette"></div>
+    <div id="speedlines"></div>
+
+    <!-- 左上：ステータス -->
+    <div id="stats" class="panel">
+      <div class="title">世界一長いドミノ倒し <small>v0.1</small></div>
+      <div class="row big"><span>コイン</span><b id="s-coins">0</b></div>
+      <div class="row"><span>ドミノ在庫</span><b id="s-stock">0</b></div>
+      <div class="row sub"><span>前線資材</span><b id="s-crate">0</b></div>
+      <hr />
+      <div class="row"><span>現在の連鎖</span><b id="s-chain">0</b></div>
+      <div class="row"><span>建設済み残り</span><b id="s-buffer">0</b></div>
+      <div class="row"><span>建設速度</span><b id="s-build">0.0 個/秒</b></div>
+      <div class="row"><span>転倒速度</span><b id="s-fall">0.0 個/秒</b></div>
+      <hr />
+      <div class="row sub"><span>累計連鎖距離</span><b id="s-dist">0 m</b></div>
+      <div class="row sub"><span>最長連鎖</span><b id="s-best">0</b></div>
+      <div class="row sub"><span>連続運転の最長</span><b id="s-bestcont">0</b></div>
+    </div>
+
+    <!-- 右上：システム -->
+    <div id="sys" class="panel">
+      <button id="b-pause" title="一時停止 (P)">⏸</button>
+      <div class="seg">
+        <button data-speed="1" class="on">1×</button>
+        <button data-speed="2">2×</button>
+        <button data-speed="4">4×</button>
+      </div>
+      <button id="b-follow" class="on" title="連鎖の先端を追尾 (F)">🎥 追尾</button>
+      <button id="b-overview" title="全体を見る (V)">🗺 全体</button>
+      <button id="b-sound" title="音のON/OFF (M)">🔊</button>
+      <button id="b-help" title="操作説明 (H)">？</button>
+      <button id="b-reset" title="セーブを消して最初から">↺</button>
+    </div>
+
+    <div id="banner"></div>
+    <div id="warning">⚠ 連鎖が建設隊に追いつく！</div>
+
+    <!-- 下：レースバー -->
+    <div id="race" class="panel hidden">
+      <div class="race-label"><span>連鎖の波</span><span id="race-text">余裕 0 個</span><span>建設の最前線</span></div>
+      <div class="race-track"><div id="race-fill"></div><div id="race-wave">🌊</div><div id="race-front">👷</div></div>
+    </div>
+
+    <!-- 下中央：メイン操作 -->
+    <div id="controls">
+      <button id="b-place" class="big-btn place" title="最前線にドミノを置く (Space長押しで連続)">🧱 置く<small>Space</small></button>
+      <button id="b-start" class="big-btn start" title="連鎖スタート (Enter)">▶ 倒す！<small>Enter</small></button>
+      <button id="b-cont" class="big-btn cont" title="連続運転モード (C)">♾ 連続運転<small id="cont-sub">C</small></button>
+      <button id="b-od" class="big-btn od" title="オーバードライブ (O)">
+        <span class="od-fill" id="od-fill"></span>
+        <span class="od-label">⚡ オーバードライブ<small id="od-sub">O</small></span>
+      </button>
+    </div>
+
+    <!-- 右：ショップ -->
+    <div id="shop" class="panel">
+      <div class="shop-head">
+        <span>設備と人手</span>
+        <button id="b-shop-toggle" title="たたむ">–</button>
+      </div>
+      <div id="shop-list"></div>
+      <div class="shop-buy">
+        <button id="b-buy10">🧱 ドミノ10個を買う <b id="buy10-cost"></b></button>
+      </div>
+    </div>
+
+    <div id="floaters"></div>
+    <div id="toast"></div>
+
+    <!-- 操作説明 -->
+    <div id="help" class="modal hidden">
+      <div class="modal-card">
+        <h2>あそびかた</h2>
+        <ol>
+          <li><b>ドミノを並べる</b>：画面を<b>クリック</b>すると、コースの最前線（▼マーク）にドミノが1個置かれます。<b>Space長押し</b>や<b>マウス長押し</b>で連続設置。</li>
+          <li><b>倒す</b>：<b>▶ 倒す！</b>（Enter）で連鎖スタート。倒れた数×コンボ倍率でコインがもらえます。</li>
+          <li><b>拾う</b>：倒れたドミノの近くをクリックすると手で回収して在庫に戻せます。<b>回収小人</b>を雇えば自動です。</li>
+          <li><b>雇う・強化する</b>：右の「設備と人手」で小人や機械を買うと、建設がどんどん自動化されます。</li>
+          <li><b>連続運転</b>：建設小人3・運搬小人2・回収小人1で解放。連鎖がだんだん加速しながら進み、その前で小人たちが建設を続けます。<b>波が最前線に追いついたら終了</b>。</li>
+          <li><b>オーバードライブ</b>：ドミノが倒れると「ぜんまい」が溜まります。満タンで発動すると10秒間、建設・運搬・回収が3倍速！ピンチのときに。</li>
+        </ol>
+        <h3>小人のしくみ</h3>
+        <ul>
+          <li>🟡 <b>建設小人</b>：前線資材置き場（なければ倉庫のおもちゃ箱）からドミノを受け取り、最前線に並べる。倒れたドミノの立て直しもする。</li>
+          <li>🔵 <b>運搬小人</b>：おもちゃ箱から前線資材置き場へドミノを運ぶ。足りないと建設が止まる。</li>
+          <li>🟢 <b>回収小人</b>：倒れたドミノを拾って倉庫に戻す。</li>
+          <li>小人はときどき転んだり、ドミノを落としたり、<b>うっかりドミノを倒して予定外の連鎖</b>を起こします。数秒で復帰します。</li>
+        </ul>
+        <h3>カメラ</h3>
+        <p>左ドラッグ：回転 ／ 右ドラッグ：移動 ／ ホイール：ズーム ／ WASD・矢印：移動 ／ F：追尾 ／ V：全体</p>
+        <p class="sub">P：一時停止 ／ 1・2・4：ゲーム速度 ／ M：音 ／ H：この画面</p>
+        <button id="b-help-close" class="big-btn start">あそぶ！</button>
+      </div>
+    </div>
+  </div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
