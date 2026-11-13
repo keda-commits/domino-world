@@ -190,6 +190,7 @@ export class GachaShow {
     this.onDone = onDone;
     this.saved = { p: this.rig.camera.position.clone(), t: this.rig.controls.target.clone() };
     this.rig.locked = true;
+    this.hideBlockers();
     document.body.classList.add('mode-gacha');
     this.el.classList.remove('hidden');
     this.rig.flyTo(this.camPos(), this.camTgt(), 1.0);
@@ -267,7 +268,22 @@ export class GachaShow {
     this.items = [];
   }
 
+  /** カメラとパッケージの間にある施設などを一時的に隠す（人は隠さない） */
+  hideBlockers() {
+    this.hidden = [];
+    const keep = new Set([this.machine, ...this.game.workers.list.map((w) => w.root)]);
+    const c = Math.cos(this.yaw), s = Math.sin(this.yaw);
+    for (const o of this.scene.children) {
+      if (keep.has(o) || !o.visible || o.isLight || o.isCamera) continue;
+      const dx = o.position.x - this.spot.x, dz = o.position.z - this.spot.z;
+      const lx = dx * c - dz * s, lz = dx * s + dz * c; // マシンのローカル座標
+      if (Math.abs(lx) < 7 && lz > 1.2 && lz < 18 && (o.position.x !== 0 || o.position.z !== 0)) { o.visible = false; this.hidden.push(o); }
+    }
+  }
   finish() {
+    const shown = this.hidden || [];
+    this.hidden = null;
+    for (const o of shown) o.visible = true;
     this.clear();
     this.state = 'idle';
     this.el.classList.add('hidden');
@@ -346,6 +362,7 @@ export class GachaShow {
   }
 
   update(dt, camera, w, h) {
+    if (this.hidden) for (const o of this.hidden) o.visible = false; // 施設側の毎フレーム更新で戻されないように
     if (this.machine) {
       const spin = this.state === 'spin' ? 1 : 0.05;
       this.machine.userData.gears.forEach((g) => (g.rotation.x += dt * 3 * spin * g.userData.dir));
