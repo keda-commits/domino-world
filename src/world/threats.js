@@ -64,6 +64,7 @@ export class Mouse {
   update(dt) {
     const g = this.game;
     this.group.userData.key.rotation.y += dt * (this.state === 'den' ? 0 : 9);
+    if (this.held) { this.body.setNextKinematicTranslation({ x: this.pos.x, y: this.pos.y + 0.32, z: this.pos.z }); return; } // つかまれている間はじたばたするだけ
     if (g.mode !== 'build') { if (this.state === 'go' || this.state === 'warn') this.startReturn(); }
     switch (this.state) {
       case 'den':

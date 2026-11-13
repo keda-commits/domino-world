@@ -311,6 +311,20 @@ export class Gnome {
       }
     }
   }
+  /** プレイヤーにつかまれた：作業を中断して、手足をばたばた */
+  grabbed() {
+    this.releaseJob();
+    if (this.m.held) this.m.held.visible = false;
+    this.state = 'held'; this.pose = 'flee'; this.poseT = 0;
+    this.say(['わわっ！', 'おろして〜！', 'たかい〜！', 'どこ行くの？'][Math.floor(Math.random() * 4)], '');
+    this.game.audio.squeak && this.game.audio.squeak(1.6);
+  }
+  /** 離された（着地した）：少し驚いてから、自然に作業へ戻る */
+  dropped(sp = 0) {
+    if (sp > 8) { this.state = 'idle'; this.trip(); return; }
+    this.state = 'act'; this.pose = 'surprised'; this.poseT = 0; this.timer = 0.7;
+    this.onDone = () => this.think();
+  }
   /** 投げたドミノが当たった（dx,dz：飛んできた向き、sp：速さ） */
   hitBy(dx, dz, sp) {
     const g = this.game;
@@ -357,6 +371,7 @@ export class Gnome {
   update(dt) {
     const g = this.game;
     this.walking = false;
+    if (this.state === 'held' || this.state === 'falling') { this.poseT += dt; this.phase = (this.phase || 0) + dt * 14; this.animate(dt); return; }
     if (this.state !== 'trip' && this.state !== 'flee') {
       const danger = g.dangerNear(this.pos);
       if (danger) {
@@ -488,6 +503,7 @@ export class Workers {
     if (role === 'guard') gn.home = g.guardPost(this.count('guard'));
     if (!quiet) { const s = SAY[role]; gn.say(s[Math.floor(Math.random() * s.length)]); }
     this.list.push(gn);
+    g.addWorkerGrab && g.addWorkerGrab(gn);
     return gn;
   }
   update(dt) { for (const gn of this.list) gn.update(dt); }

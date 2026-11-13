@@ -148,6 +148,16 @@ class StageRuntime {
     this.obstacles.push({ x, z, hw, hd, yaw, h, roomba: opts.roomba !== false, build: opts.build !== false });
     if (opts.collider !== false) this.colliders.push(this.physics.staticBox(x, h / 2, z, hw, h / 2, hd, yaw));
   }
+  /** 手で動かせる小物（つかめるオブジェクト）。shape：{r} または {hw, hd} */
+  prop(obj, x, z, yaw, shape, h, name) {
+    this.add(obj, x, z, yaw);
+    const ob = shape.r ? { x, z, r: shape.r, h, roomba: true, build: true } : { x, z, hw: shape.hw, hd: shape.hd, yaw, h, roomba: true, build: true };
+    this.obstacles.push(ob);
+    const col = shape.r ? this.physics.staticCylinder(x, h / 2, z, shape.r, h / 2) : this.physics.staticBox(x, h / 2, z, shape.hw, h / 2, shape.hd, yaw);
+    this.colliders.push(col);
+    (this.props ||= []).push({ obj, obstacle: ob, collider: col, name, h, ...shape });
+    return obj;
+  }
   circle(x, z, r, h = 6, opts = {}) {
     this.obstacles.push({ x, z, r, h, roomba: opts.roomba !== false, build: opts.build !== false });
     if (opts.collider !== false) this.colliders.push(this.physics.staticCylinder(x, h / 2, z, r, h / 2));
@@ -258,12 +268,12 @@ function buildStage1(st) {
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) st.rect(34 + sx * 7.6, -27 + sz * 3.1, 0.9, 0.9, 0, 10);
   st.group.add(model('SchoolChair_01', { width: 8, x: 33, z: -20.5, yaw: Math.PI }));
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) st.rect(33 + sx * 3, -20 + sz * 3, 0.6, 0.6, 0, 8);
-  st.add(P.blocks(3, 0), -20, 29.5); st.circle(-20, 29.5, 2.2, 9);
-  st.add(P.blocks(2, 3), 27, 29.5); st.circle(27, 29.5, 2.2, 6);
-  st.add(P.teddy(0.9), 44, 15, -1.9); st.circle(44, 15, 4.8, 14);
-  st.add(P.toyCar('#e8423b', 0.8), 38, 30, 0.3); st.rect(38, 30, 3.8, 2.1, 0.3, 4);
-  st.add(P.ballToy(3.5), -44.5, -1); st.circle(-44.5, -1, 3.6, 7);
-  st.add(P.ringTower(), 2, -28); st.circle(2, -28, 3.2, 9);
+  st.prop(P.blocks(3, 0), -20, 29.5, 0, { r: 2.2 }, 9, '積み木（あいう）');
+  st.prop(P.blocks(2, 3), 27, 29.5, 0, { r: 2.2 }, 6, '積み木（ABC）');
+  st.prop(P.teddy(0.9), 44, 15, -1.9, { r: 4.8 }, 14, 'くまのぬいぐるみ');
+  st.prop(P.toyCar('#e8423b', 0.8), 38, 30, 0.3, { hw: 3.8, hd: 2.1 }, 4, 'おもちゃの車');
+  st.prop(P.ballToy(3.5), -44.5, -1, 0, { r: 3.6 }, 7, '大きなボール');
+  st.prop(P.ringTower(), 2, -28, 0, { r: 3.2 }, 9, '輪投げタワー');
   // ガチャ専用の展示スペース（建設・人の通り道にしない）
   st.rect(-30, -24, 6.2, 6, 0, 2, { roomba: true, build: true });
 }
@@ -297,13 +307,13 @@ function buildStage2(st) {
   for (const sz of [-1, 1]) st.rect(5, -10 + sz * 8.4, 4.5, 0.6, 0, 6); // V字の脚（両端）。間はルンバが通れる
   st.add(P.tvStand(28, 6), 70, 0, -Math.PI / 2); st.rect(70, 0, 3, 14, 0, 30);
   st.group.add(model('wooden_bookshelf_worn', { width: 16, x: 40, z: -44.3 })); st.rect(40, -44.5, 8.2, 2.2, 0, 18);
-  st.add(P.plant(1), -48, -42); st.circle(-48, -42, 3.2, 10);
-  st.add(P.plant(1.1), 69.5, -27); st.circle(69.5, -27, 3.4, 10); // 充電台への帰り道をふさがない位置
-  st.add(P.plant(0.9), -68, 44); st.circle(-68, 44, 3, 10);
+  st.prop(P.plant(1), -48, -42, 0, { r: 3.2 }, 10, '植木鉢');
+  st.prop(P.plant(1.1), 69.5, -27, 0, { r: 3.4 }, 10, '植木鉢'); // 充電台への帰り道をふさがない位置
+  st.prop(P.plant(0.9), -68, 44, 0, { r: 3 }, 10, '植木鉢');
   st.group.add(model('ArmChair_01', { width: 15, x: 48, z: 26, yaw: -2.3 })); st.rect(48, 26, 7.5, 6.5, -2.3, 10);
-  st.add(P.toyCar('#1c7ed6', 0.9), -30, 44, 1.2); st.rect(-30, 44, 4.2, 2.4, 1.2, 4);
-  st.add(P.blocks(4, 2), 30, 12); st.circle(30, 12, 2.4, 12);
-  st.add(P.teddy(0.7), -64, 30, 1.0); st.circle(-64, 30, 3.6, 10);
+  st.prop(P.toyCar('#1c7ed6', 0.9), -30, 44, 1.2, { hw: 4.2, hd: 2.4 }, 4, 'おもちゃの車');
+  st.prop(P.blocks(4, 2), 30, 12, 0, { r: 2.4 }, 12, '積み木');
+  st.prop(P.teddy(0.7), -64, 30, 1.0, { r: 3.6 }, 10, 'くまのぬいぐるみ');
   st.add(P.dock(), 62, -44.5); st.rect(62, -44.5, 3.2, 1.2, 0, 3, { roomba: false });
 }
 

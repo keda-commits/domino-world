@@ -204,7 +204,9 @@ export class Dominoes {
       }
     }
     this.awake = awake;
-    if (this.dirty) { this.mesh.instanceMatrix.needsUpdate = true; this.dirty = false; }
+    // 位置が変わったら、レイ判定用の外接球を作り直す（three.js は最初のレイ判定時の外接球をずっと使うため、
+    // 後から置いた・転がったドミノにカーソルが当たらない原因になっていた）
+    if (this.dirty) { this.mesh.instanceMatrix.needsUpdate = true; this.mesh.boundingSphere = null; this.dirty = false; }
   }
 
   writeMatrix(d) {
@@ -225,7 +227,7 @@ export class Dominoes {
     if (!d || d.toppled) return false;
     const t = d.body.translation();
     const dx = t.x - slot.x, dz = t.z - slot.z;
-    return dx * dx + dz * dz < 0.04 && this.upY(d) > 0.95;
+    return dx * dx + dz * dz < 0.0676 && this.upY(d) > 0.95;
   }
 
   /** 剛体に衝撃を与える（押す・ぶつかる） */
