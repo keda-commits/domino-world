@@ -61,6 +61,59 @@ export function installDebug(ctx) {
     runToEnd: (maxSec = 400) => { let t = 0; while (game.run && t < maxSec) { game.update(1 / 30); t += 1 / 30; } return game.lastResult; },
     stock: (n) => { game.stock += n; game.stats.produced += n; },
     save: () => ctx.save(true),
+    /**
+     * 人間のように遊ぶボット（バランス検証用）。描画なしで sec 秒ぶん進める。
+     * 序盤は手で置き、短い連鎖で経験値を稼ぎ、ガチャは優先順で選び、コースが完成したら本番。
+     */
+    botPlay: (sec, opts = {}) => {
+      const g = game, log = [], dt = 1 / 20, t0 = g.time;
+      const prio = opts.prio || ['builder', 'collector', 'restorer', 'stopperCrew', 'carrier', 'machine', 'boots', 'basket', 'factory', 'train', 'bell', 'barricade', 'watchtower', 'guard', 'gate', 'sensor', 'level', 'magnet', 'clover', 'branch'];
+      let placeAcc = 0, lastRunAt = -99, runs = 0;
+      const note = (s) => log.push(`${Math.round(g.time - t0)}s Lv${g.progress.level} ${s}`);
+      const pickGacha = () => {
+        while (g.progress.tickets.length) {
+          const tk = g.progress.tickets.shift();
+          const picks = g.progress.offer(g.stageId, tk);
+          let best = picks.find((p) => p.evo) || null;
+          if (!best) for (const id of prio) { best = picks.find((p) => p.id === id); if (best) break; }
+          best = best || picks[0];
+          const r = g.progress.take(best);
+          if (best.id === 'rewind') g.rewinds += 2;
+          note(`ガチャ(${tk.source}) → ${best.evo ? '進化:' + best.evo : best.id}${r.level ? ' Lv' + r.level : ''}`);
+        }
+        g.syncPartsToWorld(true);
+      };
+      if (!g.course.allSlots.length) g.loadSuggested(opts.route || 0);
+      while (g.time - t0 < sec) {
+        g.update(dt);
+        if (g.mode !== 'build') continue;
+        // 手で置く（建設小人が少ないうち）・手で片付け（回収がいないうち）
+        if (g.level('builder') < 2) { placeAcc += dt * 2.5; while (placeAcc >= 1) { placeAcc -= 1; g.manualPlace(); } }
+        if (g.level('collector') + g.level('restorer') === 0) { for (let i = 0; i < 2; i++) g.manualRestoreStep(); }
+        // 本番の判断
+        let prefix = 0;
+        const sorted = g.course.allSlots.filter((s) => s.order >= 0).sort((a, b) => a.order - b.order);
+        for (const s of sorted) { if (s.domino && g.dominoes.isStandingAt(s.domino, s)) prefix++; else break; }
+        const pf = g.preflight();
+        const full = pf.unbuilt === 0 && pf.fallen === 0 && pf.connected;
+        const best = g.records[g.stageId].best;
+        const goalRun = full;
+        const practice = prefix >= Math.max(20, Math.floor(best * 1.25)) && g.time - lastRunAt > 25;
+        const roombaOk = !g.roomba || (g.roomba.state === 'dock' && g.roomba.timer > 8) || g.placed.some((p) => p.type === 'bell') || opts.ignoreRoomba;
+        if ((goalRun || practice) && roombaOk) {
+          if (!g.startRun()) continue;
+          runs++;
+          let tt = 0; while (g.run && tt < 400) { g.update(dt); tt += dt; }
+          const r = g.lastResult;
+          note(`本番#${runs} ${r.count}個 ${r.cleared ? '★クリア' : r.reason || ''} XP+${r.xp.total}`);
+          lastRunAt = g.time;
+          pickGacha();
+          g.afterRunMaintenance();
+          if (r.cleared) break;
+        }
+      }
+      return { log, time: Math.round(g.time - t0), level: g.progress.level, parts: { ...g.progress.parts }, evo: { ...g.progress.evolutions }, best: g.records[g.stageId].best, cleared: g.records[g.stageId].cleared, runs };
+    },
     wipe: () => ctx.reset(),
   };
   window.__dbg = api;

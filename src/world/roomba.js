@@ -160,7 +160,10 @@ export class Roomba {
         while (d > Math.PI) d -= Math.PI * 2;
         while (d < -Math.PI) d += Math.PI * 2;
         this.yaw += Math.max(-1, Math.min(1, d)) * this.turnRate * dt;
-        this.move(sp * dt * (Math.abs(d) > 1.2 ? 0.3 : 1));
+        // 曲がりながら減速（目標のまわりを回り続けないように）
+        const turnSlow = Math.max(0.12, 1 - Math.abs(d) / 1.3);
+        const nearSlow = Math.min(1, Math.max(0.35, dist / 4));
+        this.move(sp * dt * turnSlow * nearSlow);
         break;
       }
     }

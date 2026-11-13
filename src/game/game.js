@@ -339,7 +339,9 @@ export class Game {
     const minOrder = duringRun ? (this.run.frontOrder < 0 ? 12 : this.run.frontOrder + 25) : -Infinity;
     let best = null, bd = maxD * maxD;
     for (const d of this.dominoes.list) {
-      if (!d.slot || !d.toppled || d.claim || d.removed) continue;
+      if (!d.slot || d.claim || d.removed) continue;
+      // 倒れた・寄りかかって傾いた・ずれたドミノ（スロットにきちんと立っていない）
+      if (!d.toppled && this.dominoes.isStandingAt(d, d.slot)) continue;
       if (duringRun && (d.slot.order < minOrder || this.run.toppled.has(d))) continue;
       if (!d.frozen && d.body && !d.body.isSleeping()) continue; // 倒れている最中は待つ
       const t = d.body.translation();
@@ -408,7 +410,8 @@ export class Game {
     if (this.mode !== 'build') return 0;
     let n = 0;
     for (const d of [...this.dominoes.list]) {
-      if (!d.toppled || d.removed) continue;
+      if (d.removed) continue;
+      if (!d.toppled && (!d.slot || this.dominoes.isStandingAt(d, d.slot))) continue;
       const t = d.body.translation();
       if ((t.x - p.x) ** 2 + (t.z - p.z) ** 2 > 3.2 * 3.2) continue;
       if (!d.frozen && !d.body.isSleeping()) continue;
@@ -424,7 +427,8 @@ export class Game {
     if (this.mode !== 'build') return false;
     let best = null, bo = Infinity;
     for (const d of this.dominoes.list) {
-      if (!d.slot || !d.toppled || d.claim || d.removed) continue;
+      if (!d.slot || d.claim || d.removed) continue;
+      if (!d.toppled && this.dominoes.isStandingAt(d, d.slot)) continue;
       if (!d.frozen && !d.body.isSleeping()) continue;
       const t = d.body.translation();
       if ((t.x - d.slot.x) ** 2 + (t.z - d.slot.z) ** 2 > CFG.restandDistance ** 2) { this.collect(d); this.stock++; return true; }
@@ -1162,6 +1166,13 @@ export class Game {
     this.train.update(dt);
     this.factory.update(dt);
     this.planView.update(dt, this);
+    // 予約の掃除：持ち主が仕事をしていない予約を解放（進行不能の防止）
+    if ((this.claimT = (this.claimT || 0) - dt) <= 0) {
+      this.claimT = 2;
+      const held = new Set(this.workers.list.map((w) => w.job).filter(Boolean));
+      for (const d of this.dominoes.list) if (d.claim && !held.has(d)) d.claim = 0;
+      for (const sl of this.course.allSlots) if (sl.claim && sl.claim !== -1 && !held.has(sl)) sl.claim = 0;
+    }
     // ストッパーの再武装（両隣が立ったら）
     if (this.mode === 'build' && (this.rearmT = (this.rearmT || 0) - dt) <= 0) {
       this.rearmT = 0.5;

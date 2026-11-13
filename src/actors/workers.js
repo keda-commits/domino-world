@@ -66,6 +66,8 @@ export class Gnome {
   }
 
   think() {
+    this.releaseJob();
+    this.m.held.visible = false;
     this.pose = 'idle';
     const g = this.game;
     if (g.mode === 'run' && this.role === 'restorer') {
@@ -187,8 +189,8 @@ export class Gnome {
   thinkCollector() {
     const g = this.game;
     if (this.load < this.capacity) {
-      const rd = g.findRestandJob(this, Infinity);
-      if (rd && this.load === 0) return this.doRestand(rd);
+      const rd = this.load === 0 ? g.findRestandJob(this, Infinity) : null;
+      if (rd) return this.doRestand(rd);
       const lo = g.findCollectJob(this);
       if (lo) {
         this.job = lo;
