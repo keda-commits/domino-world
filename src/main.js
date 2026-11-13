@@ -183,7 +183,7 @@ game.on('runEnd', (r) => {
   save();
 });
 game.on('testEnd', (r) => fx.floatAt(rig.controls.target.clone().setY(3), r.ok ? `🧪 試し倒し成功！ ${r.reached}/${r.total}` : `🧪 ${r.reached}/${r.total} で停止（元に戻しました）`, r.ok ? 'coin' : 'warn', 2.6));
-game.on('tutorialGacha', () => setTimeout(() => { if (game.mode === 'build') startGacha(); }, 600));
+game.on('tutorialGacha', () => setTimeout(() => { if (game.mode === 'build' && !game._botMode) startGacha(); }, 600));
 game.on('stageLoaded', () => { if (view && game.stage.sun) view.useSun(game.stage.sun); });
 
 /** 連鎖のあと、ガチャがあれば自動で始める */

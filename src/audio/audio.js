@@ -146,6 +146,7 @@ export class Audio {
   /** 脅威（ルンバ・ネズミ等）の音量（設定で個別に調整できる） */
   setThreatVol(v) { this.threatVol = v; if (this.threat) this.threat.gain.value = v; }
   threatOut() {
+    if (!this.ctx || !this.sfx) return null; // まだ音が有効になっていない（ユーザー操作前）
     if (!this.threat) { this.threat = this.ctx.createGain(); this.threat.gain.value = this.threatVol ?? 0.6; this.threat.connect(this.sfx); }
     return this.threat;
   }

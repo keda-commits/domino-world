@@ -169,7 +169,7 @@ export class Roomba {
         if (dist < this.bestDist - 0.5) { this.bestDist = dist; this.progT = 0; } else this.progT += dt;
         if (this.progT > 6 && this.state === 'patrol') { this.wp++; this.progT = 0; if (this.wp >= pts.length) this.beginReturn(game); break; }
         // 帰り道で行き詰まったら：切り返し（後退＋旋回）してから、通ってきた地点を1つ先へ（瞬間移動はしない）
-        if (this.progT > 5 && this.state === 'return') { this.progT = 0; this.reverse = 0.9; this.avoidDir = Math.random() < 0.5 ? 1 : -1; this.stuckTries = (this.stuckTries || 0) + 1; if (this.stuckTries % 2 === 0 && this.wp < pts.length - 1) this.wp++; break; }
+        if (this.progT > 5 && this.state === 'return') { this.progT = 0; this.reverse = 0.9; this.avoidDir = Math.random() < 0.5 ? 1 : -1; this.stuckTries = (this.stuckTries || 0) + 1; if (!this.retracing) this.retrace(); else if (this.stuckTries % 2 === 0 && this.wp < pts.length - 1) this.wp++; break; }
         let want = Math.atan2(dx, dz);
         const sp = this.speed * (this.aggressive ? 1.5 : 1) * (this.state === 'return' && this.recalled ? 1.6 : 1);
         if (this.reverse > 0) {
@@ -220,18 +220,28 @@ export class Roomba {
   move(step) {
     this.pos.x += Math.sin(this.yaw) * step;
     this.pos.z += Math.cos(this.yaw) * step;
+    // 壁を抜けない（後退・切り返しのときも部屋の中にとどめる）
+    const b = this.stage.bounds, m = this.r + 0.2;
+    this.pos.x = Math.max(b.minX + m, Math.min(b.maxX - m, this.pos.x));
+    this.pos.z = Math.max(b.minZ + m, Math.min(b.maxZ - m, this.pos.z));
   }
 
   /** 帰り道：通ってきた地点を逆にたどって充電台へ（通れることが分かっている道） */
   beginReturn(game) {
+    // まずは充電台へまっすぐ（障害物は前方センサーで避ける）。行き詰まったら通ってきた道を逆にたどる
+    this.returnPath = [[this.def.dock.x, this.def.dock.z + this.r + 0.5]];
+    this.retracing = false;
+    this.state = 'return'; this.wp = 0; this.stuckTries = 0;
+    game && game.onRoombaReturn && game.onRoombaReturn(this);
+  }
+  /** 帰り道を、通ってきた地点の逆順に切り替える（通れることが分かっている道） */
+  retrace() {
     const dockPt = [this.def.dock.x, this.def.dock.z + this.r + 0.5];
     const back = (this.trail || []).slice().reverse().map((v) => [v.x, v.z]);
-    // 今いる所から一番近い地点からたどる
     let best = 0, bd = Infinity;
     back.forEach(([x, z], i) => { const d = (x - this.pos.x) ** 2 + (z - this.pos.z) ** 2; if (d < bd) { bd = d; best = i; } });
     this.returnPath = [...back.slice(best), dockPt];
-    this.state = 'return'; this.wp = 0; this.stuckTries = 0;
-    game && game.onRoombaReturn && game.onRoombaReturn(this);
+    this.retracing = true; this.wp = 0;
   }
   dockIn(game) {
     this.state = 'dock'; this.returnT = 0; this.returnPath = null; this.trail = [];
