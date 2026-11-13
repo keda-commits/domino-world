@@ -62,7 +62,7 @@ export const STAGES = {
       // 巡回パターン（交互に実行・事前に床へ予告表示）
       patterns: [
         { name: 'ソファ前の掃除', pts: [[50, -34], [-36, -30], [-36, -22], [40, -22], [52, -32]] },
-        { name: 'テーブルまわりのスポット掃除', pts: [[46, -28], [20, -16], [5, -18], [-10, -12], [-10, -2], [5, 4], [20, -2], [20, -16], [48, -30]] },
+        { name: 'テーブルまわりのスポット掃除', pts: [[46, -28], [20, -14], [5, -12], [-10, -12], [-10, -2], [5, 4], [20, -2], [20, -16], [48, -30]] },
         { name: '窓ぎわ手前の掃除（前列に接近！）', pts: [[50, -28], [46, 0], [30, 14], [12, 22], [8, 25.5], [-12, 25.5], [-20, 20], [-36, 16], [-36, 6], [30, 6], [48, -28]] },
       ],
       idleTime: 30,
@@ -119,6 +119,8 @@ STAGES[2].suggested = [
 ];
 
 // ------------------------------------------------------------
+const BEVEL = 0.8; // ラグの縁の坂の半幅
+
 class StageRuntime {
   constructor(def, scene, physics) {
     this.def = def;
@@ -151,7 +153,9 @@ class StageRuntime {
     if (shape === 'rect') this.colliders.push(this.physics.staticBox(x, h / 2, z, hw, h / 2, hd, 0, 0.7));
     else {
       const pts = [];
-      for (let i = 0; i < 40; i++) { const a = (i / 40) * Math.PI * 2; pts.push(x + Math.cos(a) * hw, 0, z + Math.sin(a) * hd, x + Math.cos(a) * hw, h, z + Math.sin(a) * hd); }
+      // 縁はゆるい坂（約3°）にする。段差の角にまたがったドミノが傾いて連鎖が止まらないように
+      const B = BEVEL;
+      for (let i = 0; i < 48; i++) { const a = (i / 48) * Math.PI * 2; pts.push(x + Math.cos(a) * (hw + B), 0, z + Math.sin(a) * (hd + B), x + Math.cos(a) * (hw - B), h, z + Math.sin(a) * (hd - B)); }
       const d = R.ColliderDesc.convexHull(new Float32Array(pts));
       if (d) this.colliders.push(this.physics.world.createCollider(d.setFriction(0.7)));
     }
@@ -175,8 +179,11 @@ class StageRuntime {
     let h = 0;
     for (const s of this.surfaces) {
       const dx = (x - s.x) / s.hw, dz = (z - s.z) / s.hd;
-      const inside = s.shape === 'rect' ? Math.abs(dx) <= 1 && Math.abs(dz) <= 1 : dx * dx + dz * dz <= 1;
-      if (inside) h = Math.max(h, s.h);
+      if (s.shape === 'rect') { if (Math.abs(dx) <= 1 && Math.abs(dz) <= 1) h = Math.max(h, s.h); continue; }
+      // 楕円：縁の坂に合わせた高さ
+      const rn = Math.hypot(dx, dz), dist = Math.hypot(x - s.x, z - s.z);
+      const edge = rn > 1e-6 ? dist - dist / rn : -1e9; // 縁からの距離（内側が負）
+      h = Math.max(h, s.h * Math.min(1, Math.max(0, (BEVEL - edge) / (2 * BEVEL))));
     }
     return h;
   }
@@ -230,7 +237,8 @@ function buildStage1(st) {
 
   const rugM = st.add(P.rug(14, 10, ['#d9534f', '#f0c05a', '#3f8f8a', '#7a5ea8', '#f0c05a']), 1, 2);
   rugM.material.normalMap = fabricNormal([6, 6]); rugM.material.normalScale.set(1.5, 1.5); rugM.material.roughness = 1;
-  st.surface(1, 2, 14, 10, 0.08, 'ellipse');
+  // ラグは見た目だけ（薄い）。物理の段差を作ると縁に沿ったドミノが傾いて連鎖が止まるため
+  rugM.scale.y = 0.4; rugM.position.y = 0.016;
 
   st.add(P.bed(16, 12), -23, 17); st.rect(-23, 17, 8.2, 6.2, 0, 6);
   st.group.add(model('SchoolDesk_01', { width: 18, x: 18, z: -19.5 }));
@@ -267,8 +275,7 @@ function buildStage2(st) {
   const sign = new THREE.Mesh(P.rbox(10, 3, 0.3, 0.2), P.MAT.wood('#e0b07a')); st.add(sign, -54, -8, 0, 22);
   for (let i = 0; i < 3; i++) { const w = st.add(P.windowFrame(22, 20), -40 + i * 45, b.minZ - 0.8); w.position.y = 28; }
 
-  const cp = st.add(new THREE.Mesh(P.rbox(56, 0.14, 40, 0.05, 2), pbr('poly_wool_herringbone', [6, 4.5], { maps: ['diff', 'nor_gl'], color: '#9fb0d6', normal: 1.2 })), 5, -8); cp.position.y = 0.07; cp.receiveShadow = true;
-  st.surface(5, -8, 28, 20, 0.14, 'rect');
+  const cp = st.add(new THREE.Mesh(P.rbox(56, 0.04, 40, 0.02, 2), pbr('poly_wool_herringbone', [6, 4.5], { maps: ['diff', 'nor_gl'], color: '#9fb0d6', normal: 1.2 })), 5, -8); cp.position.y = 0.02; cp.receiveShadow = true;
 
   st.group.add(model('sofa_02', { width: 36, x: 5, z: -40.5 })); st.rect(5, -40, 17, 6, 0, 10);
   st.group.add(model('modern_coffee_table_01', { width: 18, fit: 'z', x: 5, z: -10 }));
@@ -276,7 +283,7 @@ function buildStage2(st) {
   st.add(P.tvStand(28, 6), 70, 0, -Math.PI / 2); st.rect(70, 0, 3, 14, 0, 30);
   st.group.add(model('wooden_bookshelf_worn', { width: 16, x: 40, z: -44.3 })); st.rect(40, -44.5, 8.2, 2.2, 0, 18);
   st.add(P.plant(1), -48, -42); st.circle(-48, -42, 3.2, 10);
-  st.add(P.plant(1.1), 68, -36); st.circle(68, -36, 3.4, 10);
+  st.add(P.plant(1.1), 69.5, -27); st.circle(69.5, -27, 3.4, 10); // 充電台への帰り道をふさがない位置
   st.add(P.plant(0.9), -68, 44); st.circle(-68, 44, 3, 10);
   st.group.add(model('ArmChair_01', { width: 15, x: 48, z: 26, yaw: -2.3 })); st.rect(48, 26, 7.5, 6.5, -2.3, 10);
   st.add(P.toyCar('#1c7ed6', 0.9), -30, 44, 1.2); st.rect(-30, 44, 4.2, 2.4, 1.2, 4);

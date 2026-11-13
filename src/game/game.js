@@ -304,7 +304,10 @@ export class Game {
   onCheckpoint(cp) {
     const run = this.run;
     const sl = this.course.segments[0].slots[cp.slotIndex];
-    if (!run || run.kind !== 'main' || !run.chainSlots.has(sl)) return;
+    if (!run || run.kind !== 'main' || run.checkpoints.includes(cp)) return;
+    // 羽根が先に動いても、幅広ドミノが連鎖として数えられるまで待つ（同じフレーム内の順序差を吸収）
+    if (!run.chainSlots.has(sl)) { if (!run.pendingCps.includes(cp)) run.pendingCps.push(cp); return; }
+    run.pendingCps = run.pendingCps.filter((c) => c !== cp);
     run.checkpoints.push(cp);
     this.audio.checkpoint();
     const p = cp.pos;
@@ -417,6 +420,13 @@ export class Game {
     return true;
   }
 
+  /** ほぼ止まっているか（スリープしない寄りかかりも含む） */
+  isStill(d) {
+    if (d.frozen || !d.body || d.body.isSleeping()) return true;
+    const v = d.body.linvel(), w = d.body.angvel();
+    return v.x * v.x + v.y * v.y + v.z * v.z < 0.01 && w.x * w.x + w.y * w.y + w.z * w.z < 0.04;
+  }
+
   /** 倒れたドミノ（その場）を探す */
   findRestandJob(gnome, maxD = Infinity, preferAccident = false) {
     // 本番中も復旧係だけは、連鎖の波より十分先のドミノを直しに行ける
@@ -424,12 +434,17 @@ export class Game {
     if (this.mode !== 'build' && !duringRun) return null;
     const minOrder = duringRun ? (this.run.frontOrder < 0 ? 12 : this.run.frontOrder + 25) : -Infinity;
     let best = null, bd = maxD * maxD;
+    // 倒れているドミノ一覧（手前のドミノが上に倒れ込んでいるスロットは、先にそちらを起こす）
+    const lying = [];
+    for (const e of this.dominoes.list) if (e.slot && !e.removed && (e.toppled || !this.dominoes.isStandingAt(e, e.slot))) { const t = e.body.translation(); lying.push({ e, x: t.x, z: t.z, o: this.ord(e.slot) }); }
+    const covered = (d) => { const o = this.ord(d.slot); for (const l of lying) if (l.e !== d && l.o < o && (l.x - d.slot.x) ** 2 + (l.z - d.slot.z) ** 2 < 0.36) return true; return false; };
     for (const d of this.dominoes.list) {
       if (!d.slot || d.claim || d.removed) continue;
       // 倒れた・寄りかかって傾いた・ずれたドミノ（スロットにきちんと立っていない）
       if (!d.toppled && this.dominoes.isStandingAt(d, d.slot)) continue;
+      if (covered(d)) continue;
       if (duringRun && (d.slot.order < minOrder || this.run.toppled.has(d))) continue;
-      if (!d.frozen && d.body && !d.body.isSleeping()) continue; // 倒れている最中は待つ
+      if (!this.isStill(d)) continue; // 倒れている最中は待つ（寄りかかって止まったものは対象）
       const t = d.body.translation();
       const dist2s = (t.x - d.slot.x) ** 2 + (t.z - d.slot.z) ** 2;
       if (dist2s > CFG.restandDistance ** 2) continue;
@@ -473,12 +488,12 @@ export class Game {
     for (const d of this.dominoes.list) {
       if (d.claim || d.removed) continue;
       let loose = !d.slot;
-      if (d.slot && d.toppled && (d.frozen || d.body.isSleeping())) {
+      if (d.slot && !this.dominoes.isStandingAt(d, d.slot) && this.isStill(d)) {
         const t = d.body.translation();
         if ((t.x - d.slot.x) ** 2 + (t.z - d.slot.z) ** 2 > CFG.restandDistance ** 2) loose = true;
       }
       if (!loose) continue;
-      if (!d.frozen && !d.body.isSleeping()) continue;
+      if (!this.isStill(d)) continue;
       const t = d.body.translation();
       const dd = (t.x - gnome.pos.x) ** 2 + (t.z - gnome.pos.z) ** 2;
       if (dd < bd) { bd = dd; best = d; }
@@ -500,7 +515,7 @@ export class Game {
       if (!d.toppled && (!d.slot || this.dominoes.isStandingAt(d, d.slot))) continue;
       const t = d.body.translation();
       if ((t.x - p.x) ** 2 + (t.z - p.z) ** 2 > 3.2 * 3.2) continue;
-      if (!d.frozen && !d.body.isSleeping()) continue;
+      if (!this.isStill(d)) continue;
       if (d.slot && (t.x - d.slot.x) ** 2 + (t.z - d.slot.z) ** 2 <= CFG.restandDistance ** 2) { this.restand(d); n++; }
       else { this.collect(d); this.stock++; n++; }
       if (n >= 12) break;
@@ -515,7 +530,7 @@ export class Game {
     for (const d of this.dominoes.list) {
       if (!d.slot || d.claim || d.removed) continue;
       if (!d.toppled && this.dominoes.isStandingAt(d, d.slot)) continue;
-      if (!d.frozen && !d.body.isSleeping()) continue;
+      if (!this.isStill(d)) continue;
       const t = d.body.translation();
       if ((t.x - d.slot.x) ** 2 + (t.z - d.slot.z) ** 2 > CFG.restandDistance ** 2) { this.collect(d); this.stock++; return true; }
       const o = this.ord(d.slot);
@@ -883,7 +898,7 @@ export class Game {
     this.run = {
       id: (this.runSeq = (this.runSeq || 0) + 1), kind: 'main', t: 0, lastTopple: 0, toppled: new Set(), count: 0,
       frontPos: null, frontOrder: -1, presents: 0, clovers: 0, chest: [], gacha: false, bells: 0, piggy: 0,
-      goal: false, startPushed: false, roombaHits: 0, rogue: new Set(), chainSlots: new Set(), chainPieces: new Set(), checkpoints: [],
+      goal: false, startPushed: false, roombaHits: 0, rogue: new Set(), chainSlots: new Set(), chainPieces: new Set(), checkpoints: [], pendingCps: [],
     };
     for (const cp of this.checkpoints) cp.reset();
     // ストッパー解除（ゲートは波が来る直前まで閉じたまま）
@@ -1131,7 +1146,6 @@ export class Game {
     this.lastResult = result;
     this.history.unshift({ at: Date.now(), stage: this.stageId, count: run.count, cleared, reason, xp: xp.total, record: newBest, checkpoints: result.checkpoints.map((c) => c.index + 1) });
     this.history.length = Math.min(this.history.length, 40);
-    for (const cp of this.checkpoints) cp.fired && null;
     this.run = null;
     for (const g of this.workers.list) g.think();
     this.emit('runEnd', result);
@@ -1185,7 +1199,7 @@ export class Game {
     const released = [];
     for (const s of this.stoppers) if (s.slot.order >= a && s.slot.order < b && !s.locked && s.armed) { s.release(); released.push(s); }
     this.mode = 'test';
-    this.run = { kind: 'test', t: 0, lastTopple: 0, toppled: new Set(), count: 0, frontOrder: -1, frontPos: null, a, b, snap, temp, released, total: slots.length, rogue: new Set(), chainSlots: new Set(), chainPieces: new Set(), checkpoints: [] };
+    this.run = { kind: 'test', t: 0, lastTopple: 0, toppled: new Set(), count: 0, frontOrder: -1, frontPos: null, a, b, snap, temp, released, total: slots.length, rogue: new Set(), chainSlots: new Set(), chainPieces: new Set(), checkpoints: [], pendingCps: [] };
     this.dominoes.push(first.domino, Math.sin(first.yaw), Math.cos(first.yaw), 0.07);
     this.audio.start();
     this.emit('testStart', this.run);
@@ -1250,6 +1264,7 @@ export class Game {
     this.physics.update(dt);
     this.dominoes.update(dt);
     if (this.run) this.updateRun(dt);
+    if (this.run && this.run.pendingCps.length) for (const cp of [...this.run.pendingCps]) this.onCheckpoint(cp);
     this.goal.update(dt);
     for (const p of this.pieces) p.update(dt);
     for (const cp of this.checkpoints) cp.update(dt);

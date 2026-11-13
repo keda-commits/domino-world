@@ -156,6 +156,12 @@ export class Roomba {
           }
           break;
         }
+        // 目標に近づけない時間が続いたら（家具のすき間にはまったら）次の地点へ
+        if (this.progWp !== this.wp || this.progState !== this.state) { this.progWp = this.wp; this.progState = this.state; this.bestDist = dist; this.progT = 0; }
+        if (dist < this.bestDist - 0.5) { this.bestDist = dist; this.progT = 0; } else this.progT += dt;
+        if (this.progT > 6 && this.state === 'patrol') { this.wp++; this.progT = 0; if (this.wp >= pts.length) { this.state = 'return'; this.wp = 0; } break; }
+        // 帰還が長引いたら（家具の角などで回り続けたら）そのまま充電台に戻る
+        if (this.state === 'return') { this.returnT = (this.returnT || 0) + dt; if (this.returnT > 40) { this.pos.set(tx, 0, tz); this.dockIn(game); break; } }
         let want = Math.atan2(dx, dz);
         const sp = this.speed * (this.aggressive ? 1.5 : 1) * (this.state === 'return' && this.recalled ? 1.6 : 1);
         if (this.reverse > 0) {
@@ -209,7 +215,7 @@ export class Roomba {
   }
 
   dockIn(game) {
-    this.state = 'dock';
+    this.state = 'dock'; this.returnT = 0;
     this.timer = this.recalled ? Math.max(this.def.idleTime, this.recallTime || 45) : this.def.idleTime;
     this.recalled = false;
     this.patternIdx++;
