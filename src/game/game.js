@@ -314,6 +314,8 @@ export class Game {
       this.roomba.recall(60);
       this.fx.floatAt(tmp.set(p.x, 4.4, p.z), '🔔 警報！ルンバは充電台へ', 'warn', 2.4);
     }
+    // 近くの人たちが喜ぶ
+    for (const w of this.workers.list) if (w.state !== 'flee' && w.pos.distanceTo(p) < 30) w.act(1.4 + Math.random() * 0.8, 'cheer', () => w.think());
     this.emit('checkpoint', cp);
   }
   nextCheckpoint() { return (this.checkpoints || []).find((c) => !c.done) || null; }

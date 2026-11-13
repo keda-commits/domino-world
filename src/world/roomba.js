@@ -37,25 +37,46 @@ export class Roomba {
     this.body = physics.world.createRigidBody(R.RigidBodyDesc.kinematicPositionBased().setTranslation(this.pos.x, this.h / 2, this.pos.z));
     physics.world.createCollider(R.ColliderDesc.cylinder(this.h / 2, this.r).setFriction(0.3), this.body);
 
-    // 見た目：大きな円盤の怪物
+    // 見た目：実物に近いロボット掃除機（艶のある黒い樹脂天板・金属リング・LiDAR 塔・前面バンパー・車輪）
     const g = new THREE.Group();
-    const top = new THREE.Mesh(new THREE.CylinderGeometry(this.r, this.r * 0.98, this.h * 0.7, 48), MAT.plastic('#2b2f36'));
-    top.position.y = this.h * 0.55; g.add(top);
-    const rim = new THREE.Mesh(new THREE.CylinderGeometry(this.r * 1.01, this.r * 1.01, this.h * 0.35, 48), MAT.metal('#8c939c'));
-    rim.position.y = this.h * 0.2; g.add(rim);
-    const lid = new THREE.Mesh(new THREE.CylinderGeometry(this.r * 0.75, this.r * 0.75, 0.06, 40), MAT.plastic('#3a3f48'));
-    lid.position.y = this.h * 0.92; g.add(lid);
-    const btn = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.08, 20), MAT.metal('#d0d4da'));
-    btn.position.set(0, this.h * 0.96, this.r * 0.3); g.add(btn);
-    this.eye = new THREE.Mesh(new THREE.BoxGeometry(this.r * 0.9, 0.18, 0.12), new THREE.MeshStandardMaterial({ color: '#ff2b2b', emissive: '#ff2b2b', emissiveIntensity: 2 }));
-    this.eye.position.set(0, this.h * 0.6, this.r * 0.98); g.add(this.eye);
-    const bumper = new THREE.Mesh(new THREE.TorusGeometry(this.r * 1.0, 0.12, 8, 40, Math.PI), MAT.plastic('#15181c'));
-    bumper.rotation.x = Math.PI / 2; bumper.rotation.z = Math.PI; bumper.position.y = this.h * 0.35; g.add(bumper);
+    const R0 = this.r, H = this.h;
+    const resin = new THREE.MeshPhysicalMaterial({ color: '#16181c', roughness: 0.18, clearcoat: 1, clearcoatRoughness: 0.08 });
+    const darkPl = new THREE.MeshPhysicalMaterial({ color: '#24272d', roughness: 0.55 });
+    const chrome = new THREE.MeshStandardMaterial({ color: '#b9c0c8', roughness: 0.22, metalness: 0.95 });
+    const rubber = new THREE.MeshStandardMaterial({ color: '#0d0e10', roughness: 0.9 });
+    const lathe = (pts, mat, seg = 64) => new THREE.Mesh(new THREE.LatheGeometry(pts.map(([x, y]) => new THREE.Vector2(x, y)), seg), mat);
+    // 本体（側面は少し内側へすぼまる）
+    g.add(lathe([[0, 0.12], [R0 * 0.94, 0.12], [R0, 0.3], [R0, H * 0.72], [R0 * 0.97, H * 0.8], [0, H * 0.8]], darkPl));
+    // 艶のある天板
+    const top = lathe([[0, H * 0.86], [R0 * 0.95, H * 0.86], [R0 * 0.97, H * 0.8], [R0 * 0.9, H * 0.79]], resin);
+    g.add(top);
+    const plate = new THREE.Mesh(new THREE.CylinderGeometry(R0 * 0.95, R0 * 0.95, 0.03, 64), resin); plate.position.y = H * 0.86; g.add(plate);
+    // 金属リング
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(R0 * 0.62, 0.035, 8, 64), chrome); ring.rotation.x = Math.PI / 2; ring.position.y = H * 0.885; g.add(ring);
+    // LiDAR 塔（回転して周りを“見る”）
+    this.lidar = new THREE.Group(); this.lidar.position.set(0, H * 0.88, -R0 * 0.25);
+    const tower = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.66, 0.42, 32), resin); tower.position.y = 0.21; this.lidar.add(tower);
+    const lcap = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.6, 0.05, 32), chrome); lcap.position.y = 0.44; this.lidar.add(lcap);
+    this.scan = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.09, 0.05), new THREE.MeshStandardMaterial({ color: '#ff2b2b', emissive: '#ff2b2b', emissiveIntensity: 3 }));
+    this.scan.position.set(0, 0.22, 0.64); this.lidar.add(this.scan);
+    g.add(this.lidar);
+    // 操作ボタンと状態 LED（待機中は青、出動中は赤く脈打つ）
+    const btn = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 0.05, 24), chrome); btn.position.set(0, H * 0.9, R0 * 0.45); g.add(btn);
+    this.led = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.04, 6, 32), new THREE.MeshStandardMaterial({ color: '#3fa9ff', emissive: '#3fa9ff', emissiveIntensity: 2 }));
+    this.led.rotation.x = Math.PI / 2; this.led.position.set(0, H * 0.885, R0 * 0.45); g.add(this.led);
+    // 前面バンパー（半周）と赤外線センサー窓（赤い目）
+    const bumper = new THREE.Mesh(new THREE.CylinderGeometry(R0 * 1.025, R0 * 1.025, H * 0.48, 48, 1, true, -Math.PI / 2 - 0.2, Math.PI + 0.4), darkPl);
+    bumper.position.y = H * 0.42; g.add(bumper);
+    this.eye = new THREE.Mesh(new THREE.CylinderGeometry(R0 * 1.03, R0 * 1.03, 0.12, 48, 1, true, -0.55, 1.1), new THREE.MeshStandardMaterial({ color: '#ff2b2b', emissive: '#ff2b2b', emissiveIntensity: 2, side: THREE.DoubleSide }));
+    this.eye.position.y = H * 0.5; g.add(this.eye);
+    // 車輪（わずかに見える）
+    for (const sx of [-1, 1]) { const w = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.22, 20), rubber); w.rotation.z = Math.PI / 2; w.position.set(sx * R0 * 0.78, 0.3, 0); g.add(w); }
+    // サイドブラシ（3本の毛）
     this.brushes = [];
     for (const sx of [-1, 1]) {
       const br = new THREE.Group();
-      for (let i = 0; i < 3; i++) { const b = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.03, 0.08), MAT.matte('#e9ecef')); b.position.x = 0.7; b.rotation.y = (i / 3) * Math.PI * 2; const piv = new THREE.Group(); piv.add(b); piv.rotation.y = (i / 3) * Math.PI * 2; br.add(piv); }
-      br.position.set(sx * this.r * 0.6, 0.05, this.r * 0.7);
+      for (let i = 0; i < 3; i++) { const b = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.03, 0.06), MAT.matte('#d8dde3')); b.position.x = 0.6; const piv = new THREE.Group(); piv.add(b); piv.rotation.y = (i / 3) * Math.PI * 2; br.add(piv); }
+      br.position.set(sx * R0 * 0.62, 0.05, R0 * 0.68);
       g.add(br); this.brushes.push(br);
     }
     shadow(g);
@@ -173,7 +194,11 @@ export class Roomba {
     // 警告リング
     this.alertRing.position.set(this.pos.x, 0.22, this.pos.z);
     this.alertRing.material.opacity = this.state === 'dock' ? 0 : 0.25 + Math.sin(performance.now() * 0.01) * 0.15;
-    this.eye.material.emissiveIntensity = this.state === 'dock' ? 0.5 : 1.5 + Math.sin(performance.now() * 0.015) * 1;
+    const t = performance.now() * 0.001, act = this.state !== 'dock';
+    this.eye.material.emissiveIntensity = act ? 1.6 + Math.sin(t * 15) * 1.1 : 0.15;
+    this.lidar.rotation.y += dt * (act ? 6 : 0.6);
+    this.led.material.emissive.set(act ? '#ff2b2b' : '#3fa9ff'); this.led.material.color.copy(this.led.material.emissive);
+    this.led.material.emissiveIntensity = act ? 2 + Math.sin(t * 9) * 1.2 : 1 + Math.sin(t * 2) * 0.6;
   }
 
   probe(yaw, dist) { return !this.blockedAt(this.pos.x + Math.sin(yaw) * dist, this.pos.z + Math.cos(yaw) * dist); }

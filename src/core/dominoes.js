@@ -7,37 +7,19 @@ import { R } from './physics.js';
  * 物理ドミノの管理。
  * - 全ドミノが Rapier の剛体（立っている間はスリープ）
  * - 倒れて落ち着いたドミノは固定剛体に切り替えて計算を止める（実際に倒れた姿勢のまま）
- * - 描画は InstancedMesh 1つ（色はインスタンスごと、白い目はシェーダで合成）
+ * - 描画は InstancedMesh 1つ（色はインスタンスごと。目・模様なしの艶のある樹脂）
  */
-export const PALETTE = ['#ff3b3b', '#ff8a1f', '#ffd21f', '#3ccf5a', '#1fa8ff', '#6b5cff', '#ff5cb0', '#ffffff', '#22c2b5'];
+export const PALETTE = ['#e2231a', '#f57c00', '#f9c80e', '#2fa84f', '#1565c0', '#6a1b9a', '#e91e63', '#f2f2ee', '#00897b'];
 const MAX = 3200;
 
-function pipMask() {
-  const c = document.createElement('canvas');
-  c.width = 128; c.height = 256;
-  const x = c.getContext('2d');
-  x.fillStyle = '#000'; x.fillRect(0, 0, 128, 256);
-  x.fillStyle = '#8a8a8a'; x.fillRect(14, 125, 100, 6); // 中央の溝
-  x.fillStyle = '#fff';
-  const dot = (px, py) => { x.beginPath(); x.arc(px, py, 11, 0, Math.PI * 2); x.fill(); };
-  [[36, 40], [92, 40], [64, 64], [36, 88], [92, 88]].forEach(([a, b]) => dot(a, b));
-  [[40, 168], [88, 168], [40, 216], [88, 216]].forEach(([a, b]) => dot(a, b));
-  const t = new THREE.CanvasTexture(c);
-  t.anisotropy = 8;
-  return t;
-}
 
 function makeMaterials() {
-  const mask = pipMask();
-  const face = new THREE.MeshPhysicalMaterial({ map: mask, roughness: 0.22, metalness: 0, clearcoat: 0.7, clearcoatRoughness: 0.15 });
-  face.onBeforeCompile = (sh) => {
-    sh.fragmentShader = sh.fragmentShader
-      .replace('#include <map_fragment>', '')
-      .replace('#include <color_fragment>', '#include <color_fragment>\n float pipM = texture2D(map, vMapUv).r;\n diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.96, 0.95, 0.9), pipM);');
-  };
-  const side = new THREE.MeshPhysicalMaterial({ color: '#ffffff', roughness: 0.25, clearcoat: 0.7, clearcoatRoughness: 0.15 });
-  // RoundedBoxGeometry も BoxGeometry と同じ面順: +x, -x, +y, -y, +z, -z
-  return [side, side, side, side, face, face];
+  // 実物の樹脂ドミノ：漫画的な目は付けず、つやのある無地のプラスチック
+  const m = new THREE.MeshPhysicalMaterial({
+    color: '#ffffff', roughness: 0.26, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.12,
+    specularIntensity: 0.6, sheen: 0, envMapIntensity: 0.9,
+  });
+  return m;
 }
 
 export class Dominoes {
@@ -47,7 +29,8 @@ export class Dominoes {
     this.list = new Set();
     this.free = [];
     for (let i = MAX - 1; i >= 0; i--) this.free.push(i);
-    const geo = new RoundedBoxGeometry(CFG.dominoW, CFG.dominoH, CFG.dominoT, 2, 0.035);
+    // 描画モデル（物理コライダーとは別。少しだけ角を丸めた実物寸法）
+    const geo = new RoundedBoxGeometry(CFG.dominoW, CFG.dominoH, CFG.dominoT, 3, 0.022);
     this.mesh = new THREE.InstancedMesh(geo, makeMaterials(), MAX);
     this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.mesh.castShadow = true;

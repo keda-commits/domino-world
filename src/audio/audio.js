@@ -130,7 +130,10 @@ export class Audio {
   magnet(n) { for (let i = 0; i < Math.min(n, 12); i++) this.tone(900 + i * 80, 0.08, 'sine', 0.06, 0.4 + i * 0.05); }
   rewind() { this.tone(1600, 0.6, 'sawtooth', 0.05, 0, 200); for (let i = 0; i < 10; i++) this.tone(2000 - i * 120, 0.03, 'square', 0.04, i * 0.05); }
   toot() { this.tone(587, 0.18, 'square', 0.06); this.tone(740, 0.25, 'square', 0.06, 0.2); }
-  roombaStart() { this.tone(220, 0.4, 'sawtooth', 0.08, 0, 440); this.tone(330, 0.5, 'square', 0.04, 0.1, 660); }
+  roombaStart() { // 低いうなり＋2音のサイレン
+    this.tone(70, 0.9, 'sawtooth', 0.09, 0, 55); this.tone(110, 0.9, 'square', 0.03, 0, 90);
+    for (let i = 0; i < 3; i++) { this.tone(392, 0.16, 'square', 0.05, 0.25 + i * 0.36, 392); this.tone(311, 0.16, 'square', 0.05, 0.43 + i * 0.36, 311); }
+  }
   gachaSpin() { for (let i = 0; i < 8; i++) this.tone(600 + i * 60, 0.05, 'square', 0.04, i * 0.07); }
   gachaReveal(rarity) {
     const tbl = { common: [659, 784], rare: [659, 784, 988], epic: [659, 831, 988, 1319], legendary: [523, 659, 784, 1046, 1319, 1568, 2093] };

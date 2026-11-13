@@ -171,6 +171,7 @@ game.on('goalStep', (e) => { ctx.event = e.pos.clone ? e.pos.clone() : new THREE
 game.on('special', (e) => { ctx.event = new THREE.Vector3(e.pos.x, 0, e.pos.z); });
 game.on('checkpoint', (cp) => { ctx.event = cp.pos.clone(); });
 game.on('goal', () => { ctx.event = game.goal.focus().clone(); game.workers.list.forEach((w) => w.act(3 + Math.random(), 'cheer', () => w.think())); });
+game.on('roomba', (k) => { if (k === 'depart' && game.run && game.roomba) ctx.event = game.roomba.pos.clone(); });
 game.on('runEnd', (r) => {
   audio.setSong('build');
   rig.endRun();

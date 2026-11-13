@@ -132,7 +132,7 @@ export function installDebug(ctx) {
     },
     wipe: () => ctx.reset(),
   };
-  window.__dbg = api;
+  window.__dbg = api; Object.defineProperty(api, "ctx", { value: ctx, enumerable: false });
 
   const partOpts = Object.entries(PARTS).map(([id, p]) => `<option value="${id}">${p.icon} ${p.name}</option>`).join('');
   const evoOpts = Object.entries(EVOLUTIONS).map(([id, e]) => `<option value="${id}">${e.icon} ${e.name}</option>`).join('');
