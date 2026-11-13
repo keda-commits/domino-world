@@ -68,6 +68,19 @@ export class Gnome {
   think() {
     this.pose = 'idle';
     const g = this.game;
+    if (g.mode === 'run' && this.role === 'restorer') {
+      const rd = g.findRestandJob(this, Infinity, true);
+      if (rd) return this.doRestand(rd);
+      const es = g.findRunRepairSlot(this);
+      if (es) {
+        this.job = es;
+        return this.goto(() => g.sideOf(es, this.side, tmp), () => {
+          if (es.domino || es.claim !== this.id || g.mode !== 'run' || g.run.frontOrder + 8 > es.order || g.stock <= 0) { this.releaseJob(); return this.think(); }
+          this.face(es);
+          this.act(CFG.placeTime / (this.speed * 1.5), 'place', () => { this.releaseJob(); if (!es.domino && g.stock > 0) { g.stock--; g.placeAt(es, null); this.say('間に合え〜！'); } this.think(); });
+        }, 1.6);
+      }
+    }
     if (g.mode === 'run' || g.mode === 'test') return this.watchRun();
     switch (this.role) {
       case 'builder': return this.thinkBuilder();
@@ -179,7 +192,7 @@ export class Gnome {
       const lo = g.findCollectJob(this);
       if (lo) {
         this.job = lo;
-        return this.goto(() => { const t = lo.body.translation(); return tmp.set(t.x, 0, t.z); }, () => {
+        return this.goto(() => { if (lo.removed) return this.pos; const t = lo.body.translation(); return tmp.set(t.x, 0, t.z); }, () => {
           if (lo.removed || lo.claim !== this.id) { this.releaseJob(); return this.think(); }
           this.releaseJob();
           g.collect(lo);
@@ -233,7 +246,7 @@ export class Gnome {
     const lo = g.findCollectJob(this);
     if (lo && this.load < 4) {
       this.job = lo;
-      return this.goto(() => { const t = lo.body.translation(); return tmp.set(t.x, 0, t.z); }, () => {
+      return this.goto(() => { if (lo.removed) return this.pos; const t = lo.body.translation(); return tmp.set(t.x, 0, t.z); }, () => {
         if (lo.removed || lo.claim !== this.id) { this.releaseJob(); return this.think(); }
         this.releaseJob(); g.collect(lo); this.load++; this.think();
       });

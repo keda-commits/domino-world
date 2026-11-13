@@ -16,7 +16,7 @@ export function local(o, lx, lz) {
   return { x: o.x + lx * c + lz * s, z: o.z - lx * s + lz * c };
 }
 
-function hingedPaddle(physics, pose, w, h, t, density = 0.3) {
+export function hingedPaddle(physics, pose, w, h, t, density = 0.3) {
   // 底辺を軸に前へ倒れる板（回転ジョイント）
   const base = physics.world.createRigidBody(R.RigidBodyDesc.fixed().setTranslation(pose.x, pose.y || 0, pose.z).setRotation(physics.quatYaw(pose.yaw)));
   const body = physics.world.createRigidBody(R.RigidBodyDesc.dynamic().setTranslation(pose.x, (pose.y || 0) + h / 2 + 0.02, pose.z).setRotation(physics.quatYaw(pose.yaw)).setAngularDamping(0.4).setCanSleep(true));
@@ -83,140 +83,6 @@ export class GoalBell {
   dispose() { this.paddle.dispose(); this.scene.remove(this.group); this.scene.remove(this.paddleMesh); }
 }
 
-// ======================= ゴール：ステージ2 巨大からくり装置 =======================
-// 最終ドミノ → 大パドル → ビー玉が坂を転がる → 巨大ドミノ3枚 → 打鐘パドル → ベル → 巨大な旗が上がる
-export class GoalMachine {
-  constructor(scene, physics, g) {
-    this.scene = scene; this.physics = physics; this.port = g;
-    this.group = new THREE.Group();
-    scene.add(this.group);
-    this.cols = [];
-    this.meshes = [];
-    const yaw = g.yaw;
-    const box = (lx, ly, lz, hx, hy, hz, pitch = 0, mat = MAT.wood('#c98c55')) => {
-      const p = local(g, lx, lz);
-      this.cols.push(physics.staticBox(p.x, ly, p.z, hx, hy, hz, yaw, 0.4, pitch));
-      const m = mesh(rbox(hx * 2, hy * 2, hz * 2, 0.06, 2), mat, p.x, ly, p.z);
-      m.rotation.set(0, 0, 0);
-      tmpE.set(pitch, yaw, 0, 'YXZ'); m.quaternion.setFromEuler(tmpE);
-      shadow(m); this.group.add(m);
-    };
-    // 1) 大パドル
-    this.p1 = hingedPaddle(physics, { x: g.x, z: g.z, yaw }, 1.2, 2.0, 0.14, 0.4);
-    this.p1Mesh = mesh(rbox(1.2, 2.0, 0.14, 0.05), MAT.plastic('#ff8a1f')); this.p1Mesh.castShadow = true; scene.add(this.p1Mesh);
-    // 2) ビー玉の台と坂（パドルの先端が押す位置）
-    const ledgeTop = 1.45;
-    box(0, ledgeTop - 0.1, 1.05, 0.7, 0.1, 0.45, -0.05);
-    // 坂（長さ 9、下りへ）
-    const slope = Math.atan2(ledgeTop - 0.2, 9);
-    box(0, (ledgeTop + 0.2) / 2 - 0.12, 1.5 + 4.5, 0.75, 0.1, 4.55, slope, MAT.plastic('#4dabf7'));
-    for (const sx of [-1, 1]) box(sx * 0.85, (ledgeTop + 0.2) / 2 + 0.15, 1.5 + 4.5, 0.08, 0.3, 4.55, slope, MAT.plastic('#ffffff'));
-    // 床の溝
-    for (const sx of [-1, 1]) box(sx * 0.85, 0.25, 12.5, 0.08, 0.25, 1.6, 0, MAT.plastic('#ffffff'));
-    // 支柱
-    box(-1.1, ledgeTop / 2, 1.0, 0.15, ledgeTop / 2, 0.15); box(1.1, ledgeTop / 2, 1.0, 0.15, ledgeTop / 2, 0.15);
-    this.marblePose = local(g, 0, 0.95);
-    this.marbleY = ledgeTop + 0.45 + 0.01;
-    this.marble = physics.world.createRigidBody(R.RigidBodyDesc.dynamic().setTranslation(this.marblePose.x, this.marbleY, this.marblePose.z).setCcdEnabled(true).setAngularDamping(0.05));
-    physics.world.createCollider(R.ColliderDesc.ball(0.45).setDensity(3).setFriction(0.3).setRestitution(0.2), this.marble);
-    this.marble.sleep();
-    this.marbleMesh = mesh(new THREE.SphereGeometry(0.45, 28, 20), new THREE.MeshPhysicalMaterial({ color: '#59c3ff', roughness: 0.02, transmission: 0.6, thickness: 0.9, ior: 1.5, clearcoat: 1 }));
-    this.marbleMesh.castShadow = true; scene.add(this.marbleMesh);
-    // 3) 巨大ドミノ3枚
-    this.giants = [];
-    for (let i = 0; i < 3; i++) {
-      const p = local(g, 0, 14.6 + i * 1.5);
-      const b = physics.world.createRigidBody(R.RigidBodyDesc.dynamic().setTranslation(p.x, 1.25, p.z).setRotation(physics.quatYaw(yaw)).setCanSleep(true));
-      physics.world.createCollider(R.ColliderDesc.roundCuboid(0.55, 1.2, 0.15, 0.05).setDensity(0.5).setFriction(0.45), b);
-      b.sleep();
-      const m = mesh(rbox(1.2, 2.5, 0.4, 0.06), MAT.plastic(['#ff3b3b', '#ffd21f', '#1fa8ff'][i]));
-      m.castShadow = true; scene.add(m);
-      this.giants.push({ b, m, p });
-    }
-    // 4) 打鐘パドル
-    const p2 = local(g, 0, 14.6 + 3 * 1.5 + 0.2);
-    this.p2 = hingedPaddle(physics, { x: p2.x, z: p2.z, yaw }, 1.4, 2.2, 0.16, 0.4);
-    this.p2Mesh = mesh(rbox(1.4, 2.2, 0.16, 0.05), MAT.plastic('#ff4d6d')); this.p2Mesh.castShadow = true; scene.add(this.p2Mesh);
-    // 5) 大きな枠・ベル・旗
-    const frame = new THREE.Group();
-    const wm = MAT.wood('#b8814f');
-    frame.add(mesh(rbox(9, 0.6, 7, 0.2), wm, 0, 0.3, 0));
-    for (const sx of [-1, 1]) frame.add(mesh(rbox(0.7, 12, 0.7, 0.2), wm, sx * 3.6, 6, 0));
-    frame.add(mesh(rbox(8, 0.7, 1, 0.2), wm, 0, 11.8, 0));
-    this.bell = new THREE.Group();
-    const bm = mesh(new THREE.CylinderGeometry(1, 2.6, 3.4, 32, 1, true), MAT.metal('#f2c14e'), 0, -2, 0); bm.material.side = THREE.DoubleSide;
-    this.bell.add(bm, mesh(new THREE.SphereGeometry(1, 16, 10), MAT.metal('#f2c14e'), 0, -0.4, 0));
-    this.bell.position.set(0, 11.4, 0);
-    frame.add(this.bell);
-    this.gears = [];
-    for (let i = 0; i < 3; i++) {
-      const gear = mesh(new THREE.TorusGeometry(1.1 - i * 0.2, 0.3, 8, 12), MAT.metal(['#ffd43b', '#adb5bd', '#ff922b'][i]), -3.6 + i * 0.1, 3 + i * 2.2, 0.8);
-      gear.rotation.y = Math.PI / 2;
-      frame.add(gear); this.gears.push(gear);
-    }
-    const pole = mesh(new THREE.CylinderGeometry(0.2, 0.25, 22, 12), MAT.metal(), 6, 11, 0);
-    frame.add(pole);
-    this.flag = new THREE.Group();
-    const fl = mesh(new THREE.PlaneGeometry(7, 4, 10, 4), new THREE.MeshStandardMaterial({ color: '#ff3b5c', side: THREE.DoubleSide, roughness: 0.8 }), 3.6, 0, 0);
-    this.flagMesh = fl;
-    const txt = document.createElement('canvas'); txt.width = 256; txt.height = 128;
-    const cx = txt.getContext('2d'); cx.fillStyle = '#ff3b5c'; cx.fillRect(0, 0, 256, 128); cx.fillStyle = '#fff'; cx.font = 'bold 54px sans-serif'; cx.textAlign = 'center'; cx.fillText('CLEAR!', 128, 84);
-    const tt = new THREE.CanvasTexture(txt); tt.colorSpace = THREE.SRGBColorSpace;
-    fl.material.map = tt;
-    this.flag.add(fl);
-    this.flag.position.set(6, 2.5, 0);
-    frame.add(this.flag);
-    const fp = local(g, 0, 23.5);
-    frame.position.set(fp.x, 0, fp.z);
-    frame.rotation.y = yaw;
-    shadow(frame);
-    this.group.add(frame);
-    this.frame = frame;
-    this.stage = 0; // 0:待機 1:パドル 2:ビー玉 3:巨大ドミノ 4:ベル 5:旗が上がりきった
-    this.t = 0;
-  }
-  update(dt) {
-    this.p1.sync(this.p1Mesh);
-    this.p2.sync(this.p2Mesh);
-    const mp = this.marble.translation(), mr = this.marble.rotation();
-    this.marbleMesh.position.set(mp.x, mp.y, mp.z); this.marbleMesh.quaternion.set(mr.x, mr.y, mr.z, mr.w);
-    for (const gi of this.giants) { const p = gi.b.translation(), r = gi.b.rotation(); gi.m.position.set(p.x, p.y, p.z); gi.m.quaternion.set(r.x, r.y, r.z, r.w); }
-    if (this.stage === 0 && this.p1.angle() > 0.25) { this.stage = 1; this.onStep && this.onStep('lever', this.p1Mesh.position); }
-    if (this.stage === 1) { const v = this.marble.linvel(); if (v.x * v.x + v.z * v.z > 1) { this.stage = 2; this.onStep && this.onStep('marble', this.marbleMesh.position); } }
-    if (this.stage === 2) { const r = this.giants[0].b.rotation(); if (1 - 2 * (r.x * r.x + r.z * r.z) < 0.85) { this.stage = 3; this.onStep && this.onStep('giant', this.giants[1].m.position); } }
-    if (this.stage === 3 && this.p2.angle() > 0.4) { this.stage = 4; this.t = 0; this.onStep && this.onStep('bell', this.frame.position); }
-    if (this.stage >= 4) {
-      this.t += dt;
-      this.bell.rotation.x = Math.sin(this.t * 8) * 0.45 * Math.exp(-this.t * 0.25);
-      this.gears.forEach((gg, i) => (gg.rotation.z += dt * (2 + i) * (i % 2 ? -1 : 1)));
-      this.flag.position.y = Math.min(19, 2.5 + this.t * 5);
-      const pos = this.flagMesh.geometry.attributes.position;
-      for (let i = 0; i < pos.count; i++) { const x = pos.getX(i); pos.setZ(i, Math.sin(x * 1.2 + this.t * 6) * 0.25 * (x + 3.5) / 7); }
-      pos.needsUpdate = true;
-      if (this.stage === 4 && this.flag.position.y >= 19) { this.stage = 5; if (this.onTrigger) this.onTrigger(); }
-    }
-  }
-  get triggered() { return this.stage >= 5; }
-  focus() { return this.frame.position; }
-  reset() {
-    this.p1.reset(); this.p2.reset();
-    this.marble.setTranslation({ x: this.marblePose.x, y: this.marbleY, z: this.marblePose.z }, true);
-    this.marble.setLinvel({ x: 0, y: 0, z: 0 }, true); this.marble.setAngvel({ x: 0, y: 0, z: 0 }, true); this.marble.sleep();
-    for (const gi of this.giants) {
-      gi.b.setTranslation({ x: gi.p.x, y: 1.25, z: gi.p.z }, true); gi.b.setRotation(this.physics.quatYaw(this.port.yaw), true);
-      gi.b.setLinvel({ x: 0, y: 0, z: 0 }, true); gi.b.setAngvel({ x: 0, y: 0, z: 0 }, true); gi.b.sleep();
-    }
-    this.stage = 0; this.t = 0; this.flag.position.y = 2.5; this.bell.rotation.x = 0;
-  }
-  dispose() {
-    this.p1.dispose(); this.p2.dispose();
-    this.physics.world.removeRigidBody(this.marble);
-    for (const gi of this.giants) { this.physics.world.removeRigidBody(gi.b); this.scene.remove(gi.m); }
-    for (const c of this.cols) this.physics.remove(c);
-    this.scene.remove(this.group, this.p1Mesh, this.p2Mesh, this.marbleMesh);
-  }
-}
-
 // ======================= ポート付きピース =======================
 // in: 入口（ここへ向かって連鎖が来る）、out: 出口（ここから線を引ける）
 export class LauncherPiece {
@@ -250,10 +116,14 @@ export class LauncherPiece {
       this.carStart = local(o, 0, 1.6);
       this.car = physics.world.createRigidBody(R.RigidBodyDesc.dynamic().setTranslation(this.carStart.x, 0.4, this.carStart.z).setRotation(physics.quatYaw(o.yaw)).setCcdEnabled(true).setLinearDamping(0.02));
       physics.world.createCollider(R.ColliderDesc.cuboid(0.45, 0.3, 0.75).setDensity(1.5).setFriction(0.02), this.car);
+      // 前の高い位置のバンパー（ドミノの上の方を押して倒す）
+      physics.world.createCollider(R.ColliderDesc.cuboid(0.4, 0.12, 0.05).setTranslation(0, 0.6, 1.05).setDensity(0.5).setFriction(0.3), this.car);
       this.car.sleep();
       const cm = new THREE.Group();
       cm.add(mesh(rbox(0.9, 0.4, 1.5, 0.15), MAT.plastic('#e8233f'), 0, -0.05, 0));
       cm.add(mesh(rbox(0.75, 0.3, 0.7, 0.12), MAT.plastic('#9be3ff'), 0, 0.28, -0.1));
+      cm.add(mesh(rbox(0.8, 0.24, 0.1, 0.04), MAT.plastic('#ffd21f'), 0, 0.6, 1.05));
+      for (const sx of [-0.3, 0.3]) { const rod = mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.6, 6), MAT.metal(), sx, 0.45, 0.85); rod.rotation.x = 0.9; cm.add(rod); }
       const wg = new THREE.CylinderGeometry(0.2, 0.2, 0.15, 14); wg.rotateZ(Math.PI / 2);
       for (const [x, z] of [[-0.45, 0.45], [0.45, 0.45], [-0.45, -0.45], [0.45, -0.45]]) cm.add(mesh(wg, MAT.matte('#222'), x, -0.2, z));
       shadow(cm); this.scene.add(cm); this.carMesh = cm;
@@ -261,10 +131,13 @@ export class LauncherPiece {
       // ビー玉：高い台から坂を下る
       const topH = 2.2;
       box(0, topH / 2, 1.6, 0.9, topH / 2, 0.7, 0, MAT.wood('#d9a066'));
-      const slope = Math.atan2(topH - 0.1, 7.5);
-      box(0, (topH) / 2 - 0.05, 2.3 + 3.75, 0.6, 0.06, 3.85, slope, MAT.plastic('#69db7c'));
-      for (const sx of [-1, 1]) box(sx * 0.66, topH / 2 + 0.25, 2.3 + 3.75, 0.06, 0.25, 3.85, slope, MAT.plastic('#ffffff'));
-      for (const sx of [-1, 1]) box(sx * 0.66, 0.2, 10.6, 0.06, 0.2, 1.6, 0, MAT.plastic('#ffffff'));
+      const endH = 0.55;
+      const slope = Math.atan2(topH - endH, 7.5);
+      box(0, (topH + endH) / 2 - 0.08, 2.3 + 3.75, 0.6, 0.06, 3.85, slope, MAT.plastic('#69db7c'));
+      for (const sx of [-1, 1]) box(sx * 0.66, (topH + endH) / 2 + 0.25, 2.3 + 3.75, 0.06, 0.25, 3.85, slope, MAT.plastic('#ffffff'));
+      // 終点の台（ビー玉がドミノの上の方に当たる高さ）
+      box(0, endH / 2, 11.0, 0.6, endH / 2, 1.2, 0, MAT.wood('#d9a066'));
+      for (const sx of [-1, 1]) box(sx * 0.66, endH + 0.2, 11.0, 0.06, 0.2, 1.2, 0, MAT.plastic('#ffffff'));
       this.marbleStart = local(o, 0, 1.6);
       this.marbleY = topH + 0.42;
       // 発射前のストッパー（トリガーで外れる）
@@ -355,7 +228,7 @@ export class BridgePiece {
       if (i < nUp) h = rise * (i + 1);
       else if (i < nUp + deckN) h = this.deckH;
       else h = rise * (total - i);
-      lz = (i + 0.5) * step + 0.4;
+      lz = i * step + 0.1;
       const isDeck = i >= nUp && i < nUp + deckN;
       if (isDeck) {
         // デッキは薄い板（下をくぐれる）
@@ -367,7 +240,7 @@ export class BridgePiece {
       this.slots.push({ piece: this, i, x: sp.x, y: h, z: sp.z, yaw: o.yaw, pitch: 0, domino: null, claim: 0, kind: 'normal', order: -1, warn: false });
     }
     // 手すりと橋脚（デッキ両端）
-    const s0 = (nUp + 0.5) * step + 0.4, s1 = (nUp + deckN - 0.5) * step + 0.4;
+    const s0 = nUp * step + 0.1, s1 = (nUp + deckN - 1) * step + 0.1;
     for (const lzp of [s0 - 0.3, s1 + 0.3]) for (const sx of [-1, 1]) {
       const p = local(o, sx * 0.9, lzp);
       const m = mesh(rbox(0.25, this.deckH + 1.2, 0.25, 0.05), MAT.plastic('#ffd21f'), p.x, (this.deckH + 1.2) / 2, p.z); m.castShadow = true; this.group.add(m);
@@ -376,14 +249,14 @@ export class BridgePiece {
       const p = local(o, sx * 0.9, (s0 + s1) / 2);
       const m = mesh(rbox(0.12, 0.12, s1 - s0 + 0.6, 0.04), MAT.plastic('#ffd21f'), p.x, this.deckH + 1.1, p.z); m.rotation.y = o.yaw; this.group.add(m);
     }
-    this.len = lz + step / 2 + 0.4;
+    this.len = lz + 0.1;
     this.in = { x: o.x, z: o.z, yaw: o.yaw };
-    const op = local(o, 0, this.len + 0.3);
+    const op = local(o, 0, this.len + 0.5);
     this.out = { x: op.x, z: op.z, yaw: o.yaw };
     const c = local(o, 0, this.len / 2);
     this.footprint = { x: c.x, z: c.z, hw: 1.1, hd: this.len / 2, yaw: o.yaw };
     // ルンバにとっての障害物は「上り・下りの階段部分」だけ（デッキの下は通れる）
-    const r1 = local(o, 0, (nUp * step) / 2 + 0.4), r2 = local(o, 0, this.len - (nUp * step) / 2 - 0.2);
+    const r1 = local(o, 0, (nUp * step) / 2 - 0.2), r2 = local(o, 0, this.len - (nUp * step) / 2 + 0.2);
     this.roombaBlocks = [
       { x: r1.x, z: r1.z, hw: 1.0, hd: (nUp * step) / 2, yaw: o.yaw },
       { x: r2.x, z: r2.z, hw: 1.0, hd: (nUp * step) / 2, yaw: o.yaw },

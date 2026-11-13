@@ -147,7 +147,10 @@ export class Course {
         const ip = s.to.type === 'goal' ? this.goalPort() : this.pieceById(s.to.piece).in;
         yaw = ip.yaw;
       }
-      if (!this.stage.inBounds(p.x, p.z, 0.4) || this.stage.blocked(p.x, p.z, 0.45) || others(p.x, p.z)) {
+      // 同じ線の中での交差（6個以上前のスロットに近すぎる）
+      let selfHit = false;
+      for (let k = 0; k < slots.length - 6; k++) { const q = slots[k]; if ((q.x - p.x) ** 2 + (q.z - p.z) ** 2 < 0.55 * 0.55) { selfHit = true; break; } }
+      if (selfHit || !this.stage.inBounds(p.x, p.z, 0.4) || this.stage.blocked(p.x, p.z, 0.45) || others(p.x, p.z)) {
         s.to = null; // 途中で打ち切り → 未接続
         s.cutAt = { x: p.x, z: p.z };
         break;
@@ -250,6 +253,24 @@ export class Course {
     return reach(root);
   }
 
+  /** スロットの「前」：連鎖がどこから伝わってくるべきか。'start' / スロット / {piece} */
+  predecessor(sl) {
+    if (sl.seg && sl.seg.slots) {
+      if (sl.i > 0) return sl.seg.slots[sl.i - 1];
+      const f = sl.seg.from;
+      if (f.type === 'start') return 'start';
+      if (f.type === 'branch') { const ps = this.segById(f.seg); return ps ? ps.slots[f.slot] : null; }
+      if (f.type === 'piece') { const pc = this.pieceById(f.piece); if (pc && pc.type === 'bridge') return pc.slots[pc.slots.length - 1]; return { piece: pc }; }
+    } else if (sl.piece) {
+      if (sl.i > 0) return sl.piece.slots[sl.i - 1];
+      const inSeg = this.segments.find((x) => x.to && x.to.type === 'piece' && x.to.piece === sl.piece.id);
+      return inSeg ? inSeg.slots[inSeg.slots.length - 1] : null;
+    }
+    return null;
+  }
+  /** ゴールの直前のスロット */
+  goalFeeder() { const s = this.segments.find((x) => x.to && x.to.type === 'goal'); return s ? s.slots[s.slots.length - 1] : null; }
+
   /** スロットの「次」（連鎖が伝わる先）。ピースの場合は {piece} */
   successors(sl) {
     const out = [];
@@ -259,7 +280,7 @@ export class Course {
       for (const ch of this.segments) if (ch.from.type === 'branch' && ch.from.seg === seg.id && ch.from.slot === sl.i && ch.slots[0]) out.push(ch.slots[0]);
       if (sl.i === seg.slots.length - 1) {
         if (seg.to && seg.to.type === 'goal') out.push({ goal: true });
-        if (seg.to && seg.to.type === 'piece') out.push({ piece: this.pieceById(seg.to.piece) });
+        if (seg.to && seg.to.type === 'piece') { const pc = this.pieceById(seg.to.piece); if (pc && pc.type === 'bridge' && pc.slots[0]) out.push(pc.slots[0]); else out.push({ piece: pc }); }
       }
     } else if (sl.piece) {
       const p = sl.piece;

@@ -24,13 +24,22 @@ export function installDebug(ctx) {
       for (const s of game.unbuiltList()) { if (s.domino) continue; if (game.stock <= 0) { game.stock++; game.stats.produced++; } game.stock--; game.placeAt(s, null); n++; }
       return n;
     },
+    /** コース上のドミノを全部取り除いて新品で立て直す（テストを毎回同じ条件にする） */
+    fresh: () => {
+      for (const s of game.course.allSlots) if (s.domino) { game.dominoes.remove(s.domino); s.domino = null; game.stock++; }
+      for (const d of [...game.dominoes.list]) if (!d.slot) { game.dominoes.remove(d); game.stock++; }
+      game.unbuiltDirty = true;
+      for (const p of game.pieces) p.reset && p.reset();
+      game.goal.reset();
+      return api.buildAll();
+    },
     restoreAll: () => { let n = 0; while (game.manualRestoreStep()) n++; return n; },
     route: (i) => game.loadSuggested(i),
     run: () => game.startRun(),
     roomba: (mode) => {
       const r = game.roomba; if (!r) return 'no roomba';
       if (mode === 'go') { r.timer = 0; r.enabled = true; }
-      if (mode === 'off') { r.enabled = false; }
+      if (mode === 'off') { r.enabled = false; r.state = 'dock'; r.timer = 30; r.pos.set(r.def.dock.x, 0, r.def.dock.z + r.r + 0.5); r.sync(); }
       if (mode === 'on') { r.enabled = true; }
       if (mode === 'aggressive') { r.aggressive = !r.aggressive; }
       if (mode === 'dock') r.recall();

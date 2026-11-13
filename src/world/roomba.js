@@ -22,7 +22,7 @@ export class Roomba {
     this.timer = def.idleTime * 0.6;
     this.patternIdx = 0;
     this.wp = 0;
-    this.speed = 4.2;
+    this.speed = 5;
     this.turnRate = 2.4;
     this.avoid = 0; // 回避中の残り時間
     this.reverse = 0;
@@ -182,15 +182,16 @@ export class Roomba {
 
   dockIn(game) {
     this.state = 'dock';
+    this.timer = this.recalled ? Math.max(this.def.idleTime, this.recallTime || 45) : this.def.idleTime;
     this.recalled = false;
-    this.timer = this.def.idleTime;
     this.patternIdx++;
     this.buildPreview();
     if (this.bin > 0) { game.roombaDump(this.bin, this.def.dock); this.bin = 0; }
   }
 
   /** 特殊ベル：充電台へ帰る */
-  recall(time = 20) {
+  recall(time = 45) {
+    this.recallTime = time;
     if (this.state === 'dock') { this.timer = Math.max(this.timer, time); return; }
     this.state = 'return'; this.wp = 0; this.recalled = true;
   }

@@ -115,7 +115,11 @@ export class Dominoes {
     this.mesh.instanceColor.needsUpdate = true;
     if (kind === 'present' || kind === 'clover') this.addDecor(d);
     this.writeMatrix(d);
-    if (opts.lying || opts.quat) { d.toppled = true; d.frozen = false; body.wakeUp(); }
+    if (opts.lying || opts.quat) {
+      d.toppled = true;
+      if (opts.frozen) { body.setBodyType(R.RigidBodyType.Fixed, false); d.frozen = true; }
+      else { d.frozen = false; body.wakeUp(); }
+    }
     return d;
   }
 

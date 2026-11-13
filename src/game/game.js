@@ -5,10 +5,11 @@ import { Dominoes } from '../core/dominoes.js';
 import { Course } from '../core/course.js';
 import { createStage, STAGES } from '../world/stages.js';
 import {
-  GoalBell, GoalMachine, LauncherPiece, BridgePiece, Stopper, barricadeMesh, sensorMesh, bellPieceMesh, chestMesh,
+  GoalBell, LauncherPiece, BridgePiece, Stopper, barricadeMesh, sensorMesh, bellPieceMesh, chestMesh,
   gachaMachineMesh, markerMesh, orbMesh, towerMesh, hqMesh, startPadMesh, piggyMesh,
 } from '../world/devices.js';
 import { Roomba } from '../world/roomba.js';
+import { GoalMachine } from '../world/goalMachine.js';
 import { Workers } from '../actors/workers.js';
 import { Depot, Crate, Machine, Train, Factory } from './facilities.js';
 import { PlanView } from './planView.js';
@@ -86,8 +87,10 @@ export class Game {
     this.goal.onTrigger = () => this.onGoal();
     this.goal.onStep = (name, pos) => this.emit('goalStep', { name, pos });
     const gp = this.def.goal;
-    const gfx = gp.x + Math.sin(gp.yaw) * (this.def.goal.type === 'bell' ? 2.6 : 12), gfz = gp.z + Math.cos(gp.yaw) * (this.def.goal.type === 'bell' ? 2.6 : 12);
-    this.stage.obstacles.push({ x: gfx, z: gfz, hw: this.def.goal.type === 'bell' ? 3 : 2.5, hd: this.def.goal.type === 'bell' ? 2.4 : 13, yaw: gp.yaw, roomba: true, build: true });
+    const bell = this.def.goal.type === 'bell';
+    const goff = bell ? 2.6 : 10.2;
+    const gfx = gp.x + Math.sin(gp.yaw) * goff, gfz = gp.z + Math.cos(gp.yaw) * goff;
+    this.stage.obstacles.push({ x: gfx, z: gfz, hw: bell ? 3 : 4.5, hd: bell ? 2.4 : 9.6, yaw: gp.yaw, roomba: true, build: true });
     // ルンバ
     this.roomba = this.def.roomba ? new Roomba(this.scene, this.physics, this.stage, this.def.roomba) : null;
     // 特殊ギミック（ステージ配置物）
@@ -179,16 +182,16 @@ export class Game {
     }
     if (this.level('watchtower') && !this.tower) {
       this.tower = towerMesh();
-      const p = this.guardPost(3);
+      const ts = this.def.towerSpot;
+      const p = new THREE.Vector3(ts.x, 0, ts.z);
       this.tower.position.copy(p);
       this.scene.add(this.tower);
       this.stage.obstacles.push({ x: p.x, z: p.z, r: 1.8, roomba: true, build: true });
     }
     if (this.evolved('stopperHQ') && !this.hq) {
       this.hq = hqMesh();
-      const d = this.depots[0].pos;
-      this.hqPos = new THREE.Vector3(d.x + 8, 0, d.z + 6);
-      if (!this.stage.inBounds(this.hqPos.x, this.hqPos.z, 5)) this.hqPos.set(d.x - 8, 0, d.z + 6);
+      const hs = this.def.hqSpot;
+      this.hqPos = new THREE.Vector3(hs.x, 0, hs.z);
       this.hq.position.copy(this.hqPos);
       this.scene.add(this.hq);
       this.stage.obstacles.push({ x: this.hqPos.x, z: this.hqPos.z, hw: 5, hd: 4, yaw: 0, roomba: true, build: true });
@@ -207,12 +210,9 @@ export class Game {
   }
 
   guardPost(i) {
-    const st = this.stage, b = st.bounds;
-    const cands = [[b.minX + 6, 0], [0, b.maxZ - 5], [b.maxX - 6, 0], [0, b.minZ + 6], [b.minX + 8, b.maxZ - 8]];
-    const [x, z] = cands[i % cands.length];
-    const p = new THREE.Vector3(x, 0, z);
-    for (let k = 0; k < 20 && st.blocked(p.x, p.z, 1.5); k++) { p.x *= 0.9; p.z *= 0.9; }
-    return p;
+    const posts = this.def.guardPosts;
+    const [x, z] = posts[i % posts.length];
+    return new THREE.Vector3(x, 0, z);
   }
 
   // ================= コース・建設 =================
@@ -333,10 +333,14 @@ export class Game {
 
   /** 倒れたドミノ（その場）を探す */
   findRestandJob(gnome, maxD = Infinity, preferAccident = false) {
-    if (this.mode !== 'build') return null;
+    // 本番中も復旧係だけは、連鎖の波より十分先のドミノを直しに行ける
+    const duringRun = this.mode === 'run' && gnome.role === 'restorer';
+    if (this.mode !== 'build' && !duringRun) return null;
+    const minOrder = duringRun ? (this.run.frontOrder < 0 ? 12 : this.run.frontOrder + 25) : -Infinity;
     let best = null, bd = maxD * maxD;
     for (const d of this.dominoes.list) {
       if (!d.slot || !d.toppled || d.claim || d.removed) continue;
+      if (duringRun && (d.slot.order < minOrder || this.run.toppled.has(d))) continue;
       if (!d.frozen && d.body && !d.body.isSleeping()) continue; // 倒れている最中は待つ
       const t = d.body.translation();
       const dist2s = (t.x - d.slot.x) ** 2 + (t.z - d.slot.z) ** 2;
@@ -349,8 +353,22 @@ export class Game {
     if (best) best.claim = gnome.id;
     return best;
   }
+  /** 本番中：波より十分先の空きマス（ルンバに吸われた等）を復旧係が埋める */
+  findRunRepairSlot(gnome) {
+    if (this.mode !== 'run' || !this.run || this.stock <= 0) return null;
+    const minOrder = this.run.frontOrder + 30;
+    let best = null, bd = Infinity;
+    for (const s of this.course.allSlots) {
+      if (s.domino || s.claim || s.order < minOrder) continue;
+      const d = (s.x - gnome.pos.x) ** 2 + (s.z - gnome.pos.z) ** 2 + (s.order - minOrder) * 0.5;
+      if (d < bd) { bd = d; best = s; }
+    }
+    if (best) best.claim = gnome.id;
+    return best;
+  }
   restand(d) {
     if (d.removed || !d.slot) return;
+    if (this.mode === 'run' && this.run && (this.run.frontOrder + 6 > d.slot.order)) return;
     const slot = d.slot;
     const kind = slot.kind === 'wide' ? 'wide' : slot.special ? slot.special.type : 'normal';
     const color = d.color;
@@ -493,7 +511,7 @@ export class Game {
     if (type === 'minicar' || type === 'marble' || type === 'bridge') {
       const id = (this.pieceSeq = (this.pieceSeq || 0) + 1);
       const p = type === 'bridge' ? new BridgePiece(this.scene, this.physics, { x, z, yaw }, id) : new LauncherPiece(this.scene, this.physics, type, { x, z, yaw }, id);
-      p.onFire = (pc) => this.emit('launch', pc);
+      p.onFire = (pc) => this.onPieceFire(pc);
       this.pieces.push(p);
       this.refreshCourse();
       if (!quiet) this.audio.buy();
@@ -570,6 +588,7 @@ export class Game {
     this.stoppers = this.stoppers.filter((s) => { const ok = this.course.allSlots.includes(s.slot); if (!ok) s.dispose(); return ok; });
   }
   clearCourse() {
+    if (this.mode !== 'build') return false;
     const all = [];
     for (const s of this.course.segments) for (const sl of s.slots) if (sl.domino) all.push(sl.domino);
     this.course.segments = [];
@@ -580,7 +599,7 @@ export class Game {
   }
   loadSuggested(i) {
     const sug = this.def.suggested[i];
-    if (!sug) return false;
+    if (!sug || this.mode !== 'build') return false;
     this.clearCourse();
     const pts = sug.pts.map(([x, z]) => ({ x, z }));
     // 線は1本の連続ストロークとして描いたことにする
@@ -667,7 +686,7 @@ export class Game {
     best.yaw = Math.atan2(slot.x - best.pos.x, slot.z - best.pos.z);
     best.act(0.5, 'alarm', () => best.think());
     best.say(label, 'warn');
-    this.fx.throwArc(best.pos, tmp.set(slot.x, 0.4, slot.z), Math.min(0.5, 0.15 + bd / 60), () => {
+    this.throwArc(best.pos, new THREE.Vector3(slot.x, 0.4, slot.z), Math.min(0.5, 0.15 + bd / 60), () => {
       if (!slot.domino || !next.domino) return;
       if (slot.domino.toppled && next.domino.toppled) return;
       const s = this.installStopper(slot, next, true);
@@ -675,17 +694,33 @@ export class Game {
     });
     return true;
   }
+  /** 投げたストッパーの放物線（ゲーム時間で進む） */
+  throwArc(from, to, time, cb) {
+    (this.throws ||= []);
+    const m = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.55, 0.12), new THREE.MeshStandardMaterial({ color: '#ffd21f' }));
+    m.position.copy(from); this.scene.add(m);
+    this.throws.push({ m, a: from.clone().setY(1), b: to.clone(), t: 0, time, cb });
+  }
+  updateThrows(dt) {
+    for (let i = (this.throws || []).length - 1; i >= 0; i--) {
+      const a = this.throws[i];
+      a.t += dt / a.time;
+      const k = Math.min(1, a.t);
+      a.m.position.lerpVectors(a.a, a.b, k); a.m.position.y += Math.sin(k * Math.PI) * 4; a.m.rotation.x += dt * 14;
+      if (k >= 1) { this.scene.remove(a.m); this.throws.splice(i, 1); a.cb && a.cb(); }
+    }
+  }
   onAccidentTopple(d) {
     if (this.mode !== 'build' || !d.slot || !d.slot.seg || !d.slot.seg.slots) return;
-    if (this._lastEmergency && this.time - this._lastEmergency < 0.25) return;
+    if (this._lastEmergency && this.time - this._lastEmergency < 0.7) return;
     const seg = d.slot.seg, i = d.slot.i;
-    // 両方向、まだ立っている3〜4個先にストッパーを投げ込む
+    // 両方向、連鎖の波より先（10〜16個先：波は毎秒約13個進む）の立っている所へストッパーを投げ込む
     let sent = false;
     for (const dir of [1, -1]) {
-      for (let k = 3; k <= 5; k++) {
+      for (let k = 10; k <= 16; k++) {
         const a = seg.slots[i + dir * k], b = seg.slots[i + dir * k + (dir > 0 ? 1 : -1)];
         if (!a || !b) break;
-        if (this.stoppers.some((s) => s.slot === a || s.slot === b || s.next === a)) break;
+        if (this.stoppers.some((s) => Math.abs(s.slot.order - a.order) <= k + 1 && s.slot.seg === a.seg && (dir > 0 ? s.slot.order >= d.slot.order : s.slot.order <= d.slot.order))) break;
         if (!this.dominoes.isStandingAt(a.domino, a) || !this.dominoes.isStandingAt(b.domino, b)) continue;
         const first = dir > 0 ? a : b, second = dir > 0 ? b : a;
         if (this.throwStopper(first, second)) { sent = true; break; }
@@ -758,7 +793,7 @@ export class Game {
     this.run = {
       id: (this.runSeq = (this.runSeq || 0) + 1), kind: 'main', t: 0, lastTopple: 0, toppled: new Set(), count: 0,
       frontPos: null, frontOrder: -1, presents: 0, clovers: 0, chest: [], gacha: false, bells: 0, piggy: 0,
-      goal: false, startPushed: false, roombaHits: 0,
+      goal: false, startPushed: false, roombaHits: 0, rogue: new Set(), chainSlots: new Set(), chainPieces: new Set(),
     };
     // ストッパー解除（ゲートは波が来る直前まで閉じたまま）
     let rel = 0;
@@ -779,12 +814,44 @@ export class Game {
     this.run.punchArm = arm;
   }
 
+  /** スタートから途切れずに伝わった連鎖か（ルンバや事故が先で起こした連鎖は数えない） */
+  inChain(sl) {
+    const run = this.run;
+    if (run.kind === 'test' && sl.order === run.a) return true;
+    // 直前5枚までさかのぼる（横に押しのけられたり寄りかかって止まった数枚を、波が物理的に飛び越えた場合も連続とみなす）
+    let cur = sl;
+    for (let k = 0; k < 5; k++) {
+      const pred = this.course.predecessor(cur);
+      if (pred === 'start') return true;
+      if (!pred) return false;
+      if (pred.piece && pred.x === undefined) return run.chainPieces.has(pred.piece);
+      if (run.chainSlots.has(pred)) return true;
+      cur = pred;
+    }
+    return false;
+  }
   runTopple(d) {
     const run = this.run;
-    if (!run || run.toppled.has(d)) return;
-    if (!d.slot || d.byRoomba) { if (d.byRoomba) run.roombaHits++; return; }
-    if (d.toppledBeforeRun) return;
+    if (!run || run.toppled.has(d) || run.rogue.has(d)) return;
+    if (!d.slot) return;
+    if (d.byRoomba) run.roombaHits++;
+    if (d.byRoomba || !this.inChain(d.slot)) { run.rogue.add(d); return; }
+    this.chainTopple(d);
+    // 判定の順番が前後したものを救済（先に倒れ判定された後続ドミノ）
+    const stack = [d.slot];
+    while (stack.length) {
+      const cur = stack.pop();
+      for (const nx of this.course.successors(cur)) {
+        if (nx.piece && nx.x === undefined) { if (nx.piece.fired && !run.chainPieces.has(nx.piece)) { run.chainPieces.add(nx.piece); const o = this.course.segments.find((x) => x.from.type === 'piece' && x.from.piece === nx.piece.id); const f = (nx.piece.slots && nx.piece.slots[0]) || (o && o.slots[0]); if (f && f.domino && run.rogue.has(f.domino) && !f.domino.byRoomba) { run.rogue.delete(f.domino); this.chainTopple(f.domino); stack.push(f); } } continue; }
+        if (!nx.domino || nx.goal) continue;
+        if (run.rogue.has(nx.domino) && !nx.domino.byRoomba) { run.rogue.delete(nx.domino); this.chainTopple(nx.domino); stack.push(nx); }
+      }
+    }
+  }
+  chainTopple(d) {
+    const run = this.run;
     run.toppled.add(d);
+    run.chainSlots.add(d.slot);
     run.count++;
     run.lastTopple = run.t;
     const sl = d.slot;
@@ -849,14 +916,31 @@ export class Game {
       }
     }
     // 終了判定：新しい転倒がしばらく無く、ギミックも止まっている
-    const moving = this.pieces.some((p) => p.isMoving && p.isMoving()) || (this.goal.stage >= 1 && this.goal.stage < 5);
+    if (this.goal.stage !== run.goalStage) { run.goalStage = this.goal.stage; run.goalStageT = run.t; }
+    const goalBusy = this.goal.stage >= 1 && this.goal.stage < 5 && run.t - (run.goalStageT || 0) < 8;
+    const moving = this.pieces.some((p) => p.isMoving && p.isMoving()) || goalBusy;
     if (moving) run.lastTopple = run.t;
     const idle = run.t - Math.max(run.lastTopple, 0.8);
     if ((run.goal && run.t - run.goalT > 2.5) || idle > CFG.runIdleEnd || run.t > 600) this.endRun();
   }
 
+  onPieceFire(pc) {
+    this.emit('launch', pc);
+    const run = this.run;
+    if (!run) return;
+    const inSeg = this.course.segments.find((x) => x.to && x.to.type === 'piece' && x.to.piece === pc.id);
+    const last = inSeg && inSeg.slots[inSeg.slots.length - 1];
+    if (last && run.chainSlots.has(last)) run.chainPieces.add(pc);
+  }
+
   onGoal() {
     if (!this.run || this.run.kind !== 'main') return;
+    const feeder = this.course.goalFeeder();
+    if (!feeder || !this.run.chainSlots.has(feeder)) {
+      this.run.goalRogue = true;
+      this.fx.floatAt(tmp.copy(this.goal.focus()).setY(4), 'ゴールが先に動いてしまった…（連鎖がつながっていない）', 'warn', 2.5);
+      return;
+    }
     this.run.goal = true;
     this.run.goalT = this.run.t;
     this.audio.goal();
@@ -872,7 +956,16 @@ export class Game {
       const sl = d.slot;
       for (const nx of this.course.successors(sl)) {
         if (nx.goal) { if (!this.goal.triggered && sl.order > bestOrder) { bestOrder = sl.order; stop = sl; reason = 'ゴール装置を最後まで動かせなかった'; } continue; }
-        if (nx.piece) { if (!nx.piece.fired && nx.piece.trigger && sl.order > bestOrder) { bestOrder = sl.order; stop = sl; reason = `${PIECE_LABEL[nx.piece.type]}が作動しなかった`; } continue; }
+        if (nx.piece && nx.x === undefined) {
+          const pc = nx.piece;
+          const o = this.course.segments.find((x) => x.from.type === 'piece' && x.from.piece === pc.id);
+          const f = o && o.slots[0];
+          if (sl.order <= bestOrder) continue;
+          if (!pc.fired && pc.trigger) { bestOrder = sl.order; stop = sl; reason = `${PIECE_LABEL[pc.type]}が作動しなかった`; }
+          else if (pc.fired && f && !(f.domino && run.toppled.has(f.domino))) { bestOrder = sl.order; stop = f; reason = f.domino ? `${PIECE_LABEL[pc.type]}が次のドミノを倒せなかった` : `${PIECE_LABEL[pc.type]}の先が未建設`; }
+          else if (pc.fired && !o) { bestOrder = sl.order; stop = sl; reason = `${PIECE_LABEL[pc.type]}の出口からコースが続いていない`; }
+          continue;
+        }
         if (nx.domino && run.toppled.has(nx.domino)) continue;
         if (sl.order <= bestOrder) continue;
         bestOrder = sl.order; stop = nx;
@@ -886,8 +979,14 @@ export class Game {
       }
     }
     if (!stop && !this.goal.triggered) {
-      const root = this.course.segments.find((s) => s.from.type === 'start');
-      stop = root && root.slots[0]; reason = '最初のドミノが倒れなかった';
+      if (run.count > 0) {
+        let last = null;
+        for (const d of run.toppled) if (!last || d.slot.order > last.order) last = d.slot;
+        stop = last; reason = run.goalRogue ? 'ゴールが先に作動してしまった（連鎖がつながっていない）' : 'コースの終わりまで倒れたが、ゴール装置につながっていない';
+      } else {
+        const root = this.course.segments.find((s) => s.from.type === 'start');
+        stop = root && root.slots[0]; reason = '最初のドミノが倒れなかった';
+      }
     }
     return { stop, reason };
   }
@@ -943,7 +1042,7 @@ export class Game {
   collectOrbs(run) {
     const rad = 2.5 + (this.level('magnet') ? 6 + 6 * this.level('magnet') : 0);
     let n = 0;
-    const pts = [...run.toppled].map((d) => d.body.translation());
+    const pts = [...run.toppled].filter((d) => !d.removed).map((d) => d.body.translation());
     for (const m of this.markers) {
       if (m.type !== 'orbs') continue;
       for (const o of m.orbs) {
@@ -987,7 +1086,7 @@ export class Game {
     const released = [];
     for (const s of this.stoppers) if (s.slot.order >= a && s.slot.order < b && !s.locked && s.armed) { s.release(); released.push(s); }
     this.mode = 'test';
-    this.run = { kind: 'test', t: 0, lastTopple: 0, toppled: new Set(), count: 0, frontOrder: -1, frontPos: null, a, b, snap, temp, released, total: slots.length };
+    this.run = { kind: 'test', t: 0, lastTopple: 0, toppled: new Set(), count: 0, frontOrder: -1, frontPos: null, a, b, snap, temp, released, total: slots.length, rogue: new Set(), chainSlots: new Set(), chainPieces: new Set() };
     this.dominoes.push(first.domino, Math.sin(first.yaw), Math.cos(first.yaw), 0.07);
     this.audio.start();
     this.emit('testStart', this.run);
@@ -995,7 +1094,8 @@ export class Game {
   }
   endTest() {
     const run = this.run;
-    const reached = run.frontOrder;
+    // 最後の1枚は一時ストッパーに寄りかかって止まるので、その手前まで倒れれば成功
+    const reached = run.frontOrder >= run.b - 1 ? run.b : run.frontOrder;
     const ok = reached >= run.b;
     // 元の配置に復元
     for (const { s, standing } of run.snap) {
@@ -1054,6 +1154,7 @@ export class Game {
     for (const p of this.pieces) p.update(dt);
     for (const s of this.stoppers) s.update(dt);
     if (this.roomba) this.roomba.update(dt, this);
+    this.updateThrows(dt);
     this.updateAlarm(dt);
     this.workers.update(dt);
     this.crate.update(dt);
@@ -1139,7 +1240,7 @@ export class Game {
     for (const p of d.pieces || []) {
       this.pieceSeq = Math.max(this.pieceSeq, p.id - 1);
       const piece = p.type === 'bridge' ? new BridgePiece(this.scene, this.physics, p, p.id) : new LauncherPiece(this.scene, this.physics, p.type, p, p.id);
-      piece.onFire = (pc) => this.emit('launch', pc);
+      piece.onFire = (pc) => this.onPieceFire(pc);
       this.pieces.push(piece);
       this.pieceSeq = Math.max(this.pieceSeq, p.id);
     }
@@ -1173,10 +1274,10 @@ export class Game {
       if (!s || s.domino) continue;
       const kind = s.kind === 'wide' ? 'wide' : s.special ? s.special.type : 'normal';
       if (b[1] === 1) s.domino = this.dominoes.create(s, { slot: s, kind, colorIndex: Math.floor(Math.max(0, s.order) / 4) });
-      else s.domino = this.dominoes.create({ x: b[2], y: b[3], z: b[4] }, { slot: s, kind, quat: { x: b[5], y: b[6], z: b[7], w: b[8] } });
+      else s.domino = this.dominoes.create({ x: b[2], y: b[3], z: b[4] }, { slot: s, kind, quat: { x: b[5], y: b[6], z: b[7], w: b[8] }, frozen: true });
       used++;
     }
-    for (const [x, z] of d.loose || []) { this.dominoes.create({ x, y: 0, z, yaw: Math.random() * 6 }, { lying: true }); used++; }
+    for (const [x, z] of d.loose || []) { this.dominoes.create({ x, y: 0, z, yaw: Math.random() * 6 }, { lying: true, frozen: true }); used++; }
     for (const p of d.placed || []) this.placePiece(p.type, p.x, p.z, p.yaw, true) || null;
     for (const st of d.stoppers || []) {
       const a = byKey.get(st[0]), b = byKey.get(st[1]);
