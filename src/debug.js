@@ -14,7 +14,7 @@ export function installDebug(ctx) {
 
   const api = {
     goStage: (id) => { game.unlockedStage = Math.max(game.unlockedStage, id); ctx.goStage(id); },
-    gacha: (n = 1, opts = {}) => { for (let i = 0; i < n; i++) game.progress.tickets.push({ source: 'debug', label: 'デバッグガチャ', ...opts }); ui.openGachas(() => game.syncPartsToWorld()); },
+    gacha: (n = 1, opts = {}) => { for (let i = 0; i < n; i++) game.progress.tickets.push({ source: 'debug', label: 'デバッグガチャ', ...opts }); ctx.startGacha(); },
     xp: (n) => { const u = game.progress.addXP(n); return u; },
     setPart: (id, lv) => { game.progress.parts[id] = Math.max(0, lv); game.syncPartsToWorld(true); },
     evolve: (id) => { game.progress.evolutions[id] = true; game.syncPartsToWorld(); },
@@ -61,6 +61,8 @@ export function installDebug(ctx) {
     runToEnd: (maxSec = 400) => { let t = 0; while (game.run && t < maxSec) { game.update(1 / 30); t += 1 / 30; } return game.lastResult; },
     stock: (n) => { game.stock += n; game.stats.produced += n; },
     save: () => ctx.save(true),
+    /** 比較撮影用：カメラを決まった位置に固定する */
+    setCam: (px, py, pz, tx, ty, tz) => { const r = ctx.rig; r.mode = 'free'; r.goal = null; r.userTouched = 1e9; r.camera.position.set(px, py, pz); r.controls.target.set(tx, ty, tz); r.controls.update(); },
     /** 性能計測：frames 回「更新＋描画」して1フレームの平均時間を測る */
     bench: (frames = 60, q = null) => {
       if (q) ctx.view.setQuality(q);

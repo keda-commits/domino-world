@@ -11,23 +11,28 @@ export const STAGES = {
     id: 1,
     name: 'STAGE 1　子ども部屋',
     title: 'はじめての大連鎖',
-    goalText: '300個以上を一度の連鎖で倒し、ゴールベルを鳴らす',
-    target: 300,
+    goalText: 'スタートからの連鎖でゴールベルを鳴らす',
+    target: 300, // 設計規模（クリア条件ではない）
     bounds: { minX: -32, maxX: 32, minZ: -24, maxZ: 24 },
     floor: { w: 120, d: 100, tone: 'light' },
     start: { x: -25, z: -8, yaw: Math.PI / 2 },
     goal: { x: 26.5, z: 18, yaw: Math.PI / 2, type: 'bell' },
     depots: [{ x: -26, z: -19.5 }, { x: 24, z: -4 }],
-    markers: [
-      { type: 'present', x: -6, z: -15 }, { type: 'present', x: 13, z: 5 }, { type: 'present', x: -15, z: 4 },
-      { type: 'clover', x: 4, z: 15 },
-      { type: 'orbs', x: 0, z: -6 }, { type: 'orbs', x: 18, z: 12 },
-    ],
-    chests: [{ x: -2, z: -21, kind: 'mid' }],
-    gachaMachine: { x: -17, z: -14, category: 'build' },
+    markers: [],
+    chests: [],
+    gachaMachine: null,
     towerSpot: { x: 30, z: -12 }, hqSpot: { x: 10, z: 21 },
+    gachaSpot: { x: -19, z: -21.3, yaw: 0 },
     guardPosts: [[-20, 0], [10, -2], [20, 14]],
     roomba: null,
+    // 中間ゴール（at = コースの何番目のドミノか）。到達報酬は一度きり
+    checkpoints: [
+      { at: 50, type: 'bell', name: 'ちいさなベル' },
+      { at: 130, type: 'gacha', name: 'ガチャマシンのレバー', category: 'build' },
+      { at: 222, type: 'flag', name: '旗あげスイッチ' },
+    ],
+    // コースに組み込まれた特別なドミノ（倒すと一度だけ効果）
+    specials: [{ at: 92, type: 'present' }, { at: 176, type: 'clover' }, { at: 262, type: 'present' }],
     suggested: [
       { name: 'おすすめ：部屋をひと巡りするルート', pts: [[-25, -8], [-21, -8], [-18, -9.5], [-14.2, -12.2], [-10, -14], [-6, -15.5], [-2, -17.8], [3, -18], [7, -17], [9, -14], [8, -11], [4, -9.5], [-1, -8.5], [-5, -7], [-8, -4], [-12, -1], [-15, 3], [-13, 7], [-8, 8], [-2, 8], [4, 7], [8, 6], [13, 5], [18, 3], [21, 5.5], [21.5, 9], [18.5, 11.5], [14, 12], [10, 12.5], [4, 12], [-2, 12.5], [-8, 13], [-11, 15.5], [-9, 18], [-3, 16], [4, 16.5], [10, 18], [16, 18], [21, 18], [24.5, 18]] },
     ],
@@ -37,21 +42,18 @@ export const STAGES = {
     id: 2,
     name: 'STAGE 2　リビング',
     title: 'ルンバが来たぞ！',
-    goalText: '1,000個以上を一度の連鎖で倒し、巨大からくり装置を起動する',
-    target: 1000,
+    goalText: 'ルンバから守り抜き、連鎖で巨大からくり装置を起動する',
+    target: 1300, // 設計規模（クリア条件ではない）
     bounds: { minX: -74, maxX: 74, minZ: -47, maxZ: 47 },
     floor: { w: 220, d: 160, tone: 'dark' },
     start: { x: -71.5, z: -42, yaw: 0 },
     goal: { x: 48, z: 41, yaw: Math.PI / 2, type: 'machine' },
     depots: [{ x: -66, z: 21.5 }, { x: -38, z: -42 }, { x: 27, z: -43.5 }, { x: 60, z: -20 }],
-    markers: [
-      { type: 'present', x: -64, z: 2 }, { type: 'present', x: -20, z: 34 }, { type: 'present', x: 28, z: -24 }, { type: 'present', x: 18, z: 8 },
-      { type: 'clover', x: -30, z: -20 }, { type: 'clover', x: 20, z: 37.6 },
-      { type: 'orbs', x: -60, z: -20 }, { type: 'orbs', x: 0, z: 40 }, { type: 'orbs', x: 10, z: -2 },
-    ],
-    chests: [{ x: -53, z: 5, kind: 'mid' }, { x: 10, z: 40.2, kind: 'mid' }],
-    gachaMachine: { x: -8, z: 40.5, category: 'defense' },
+    markers: [],
+    chests: [],
+    gachaMachine: null,
     towerSpot: { x: -52, z: 10 }, hqSpot: { x: -44, z: 43.5 },
+    gachaSpot: { x: -28, z: -41, yaw: 0 },
     guardPosts: [[-48, 14], [0, 25.5], [52, 10], [20, -36], [-30, -37]],
     roomba: {
       dock: { x: 62, z: -42, yaw: 0 },
@@ -64,6 +66,13 @@ export const STAGES = {
       ],
       idleTime: 30,
     },
+    checkpoints: [
+      { at: 150, type: 'flag', name: '廊下の旗' },
+      { at: 410, type: 'alarm', name: '警報ベル（ルンバを帰らせる）' },
+      { at: 760, type: 'gacha', name: '防衛ガチャマシン', category: 'defense' },
+      { at: 1060, type: 'alarm', name: '第2警報ベル' },
+    ],
+    specials: [{ at: 300, type: 'present' }, { at: 600, type: 'clover' }, { at: 930, type: 'present' }],
     suggested: [],
     build: buildStage2,
   },
@@ -276,3 +285,9 @@ export function createStage(id, scene, physics) {
   def.build(st);
   return st;
 }
+
+
+// ステージのコースは CPU（ゲーム側）が設計した固定コース。
+// （自由設計用の suggested は将来のエンドレスモード用に残している）
+STAGES[1].course = STAGES[1].suggested[0].pts;
+STAGES[2].course = STAGES[2].suggested[1].pts;

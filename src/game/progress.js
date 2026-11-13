@@ -101,6 +101,6 @@ export class Progress {
 
 export function xpForRun(n, best, piggyBonus = 0) {
   const base = XP.forRun(n);
-  const record = Math.max(0, n - best) * XP.recordBonusPerDomino;
+  const record = Math.round(Math.max(0, n - best) * XP.recordBonusPerDomino);
   return { base, record, piggy: piggyBonus, total: base + record + piggyBonus };
 }

@@ -1,23 +1,30 @@
-// localStorage セーブ。Ver.0.2 は新しいキーを使い、Ver.0.1 のセーブ（domino-world-save-v1）には触れない。
-const KEY = 'domino-world-save-v2';
-const SETTINGS = 'domino-world-settings-v2';
-const OLD_KEY = 'domino-world-save-v1';
+// localStorage セーブ。v0.3 は新しいキー。v0.2・v0.1 のセーブは読み込みはするが、消したり上書きしたりしない。
+const KEY = 'domino-world-save-v3';
+const V2 = 'domino-world-save-v2';
+const SETTINGS = 'domino-world-settings-v3';
+const OLD_SETTINGS = 'domino-world-settings-v2';
 
+const read = (k) => { try { const s = localStorage.getItem(k); return s ? JSON.parse(s) : null; } catch { return null; } };
+
+/** v3 が無ければ v2 を読み込んで移行用に返す（v2 本体はそのまま残す） */
 export function loadSave() {
-  try { const s = localStorage.getItem(KEY); return s ? JSON.parse(s) : null; } catch { return null; }
+  const v3 = read(KEY);
+  if (v3) return { data: v3, migratedFrom: null };
+  const noImport = localStorage.getItem('domino-world-v3-noimport');
+  const v2 = noImport ? null : read(V2);
+  if (v2) return { data: v2, migratedFrom: 'v0.2' };
+  return { data: null, migratedFrom: localStorage.getItem('domino-world-save-v1') ? 'v0.1' : null };
 }
 export function writeSave(data) {
   try {
     const s = JSON.stringify(data);
-    // 書き込み前に前回分を退避（破損対策）
     const prev = localStorage.getItem(KEY);
     if (prev) localStorage.setItem(KEY + '-backup', prev);
     localStorage.setItem(KEY, s);
     return s.length;
   } catch { return 0; }
 }
-export function loadBackup() { try { const s = localStorage.getItem(KEY + '-backup'); return s ? JSON.parse(s) : null; } catch { return null; } }
-export function clearSave() { try { localStorage.removeItem(KEY); localStorage.removeItem(KEY + '-backup'); } catch { /* noop */ } }
-export function hasOldSave() { try { return !!localStorage.getItem(OLD_KEY); } catch { return false; } }
-export function loadSettings() { try { return JSON.parse(localStorage.getItem(SETTINGS)) || {}; } catch { return {}; } }
+export function loadBackup() { return read(KEY + '-backup'); }
+export function clearSave() { try { localStorage.removeItem(KEY); localStorage.removeItem(KEY + '-backup'); localStorage.setItem('domino-world-v3-noimport', '1'); } catch { /* noop */ } }
+export function loadSettings() { return read(SETTINGS) || read(OLD_SETTINGS) || {}; }
 export function writeSettings(s) { try { localStorage.setItem(SETTINGS, JSON.stringify(s)); } catch { /* noop */ } }

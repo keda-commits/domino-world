@@ -25,12 +25,12 @@ export const CATEGORY = {
 export const PARTS = {
   // ---------- 建設 ----------
   builder: {
-    name: '建設小人', icon: '👷', category: 'build', rarity: 'common', max: 8, stages: [1, 2],
-    desc: (lv) => `計画したコースにドミノを並べる小人（${lv}→${lv + 1}人）`,
+    name: '建設担当', icon: '👷', category: 'build', rarity: 'common', max: 8, stages: [1, 2],
+    desc: (lv) => `設計図に沿ってドミノを先頭から並べる人（${lv}→${lv + 1}人）`,
   },
   boots: {
     name: '作業ブーツ', icon: '👢', category: 'build', rarity: 'common', max: 5, stages: [1, 2], minLevel: 2,
-    desc: (lv) => `全小人の移動・作業速度 +20%（いま ×${(1 + 0.2 * lv).toFixed(1)}）。赤いブーツを履く`,
+    desc: (lv) => `全員の移動・作業速度 +20%（いま ×${(1 + 0.2 * lv).toFixed(1)}）。赤いブーツを履く`,
   },
   machine: {
     name: 'ドミノ自動設置機', icon: '🚜', category: 'build', rarity: 'epic', max: 4, stages: [1, 2], minLevel: 4,
@@ -38,16 +38,16 @@ export const PARTS = {
   },
   level: {
     name: '水平器', icon: '📏', category: 'build', rarity: 'rare', max: 3, stages: [1, 2], minLevel: 3,
-    desc: (lv) => `小人がうっかりドミノを倒す確率 -30%（いま -${30 * lv}%）`,
+    desc: (lv) => `うっかりドミノを倒す確率 -30%（いま -${30 * lv}%）`,
   },
 
   // ---------- 運搬・回収 ----------
   carrier: {
-    name: '運搬小人', icon: '📦', category: 'logistics', rarity: 'common', max: 6, stages: [1, 2], minLevel: 2,
+    name: '運搬担当', icon: '📦', category: 'logistics', rarity: 'common', max: 6, stages: [1, 2], minLevel: 2,
     desc: (lv) => `倉庫から最前線の資材置き場へ運ぶ（${lv}→${lv + 1}人）`,
   },
   collector: {
-    name: '回収小人', icon: '🧺', category: 'logistics', rarity: 'common', max: 6, stages: [1, 2],
+    name: '回収担当', icon: '🧺', category: 'logistics', rarity: 'common', max: 6, stages: [1, 2],
     desc: (lv) => `倒れたドミノを立て直し、散らばったドミノを拾う（${lv}→${lv + 1}人）`,
   },
   basket: {
@@ -74,7 +74,7 @@ export const PARTS = {
   },
   watchtower: {
     name: '見張り塔', icon: '🗼', category: 'defense', rarity: 'rare', max: 3, stages: [2],
-    desc: (lv) => `見張り係がルンバと事故を半径${12 + 6 * lv}で検知し警報。小人が早めに退避`,
+    desc: (lv) => `見張り係がルンバと事故を半径${12 + 6 * lv}で検知し警報。みんな早めに退避`,
   },
   guard: {
     name: '警備係', icon: '👮', category: 'defense', rarity: 'rare', max: 4, stages: [2],
@@ -93,31 +93,31 @@ export const PARTS = {
     desc: () => 'ストッパーが本番中も閉じたまま守り、連鎖の波が来る直前に自動で開く',
   },
   bridge: {
-    name: '高架橋', icon: '🌉', category: 'defense', rarity: 'epic', max: 3, stages: [2],
+    name: '高架橋', icon: '🌉', category: 'defense', rarity: 'epic', max: 3, stages: [] /* 自由設計（将来のエンドレスモード）用 */,
     desc: (lv) => `ルンバの上を越える高架ドミノ橋を1基追加（いま ${lv}基）`,
   },
 
   // ---------- 連鎖ギミック ----------
   branch: {
-    name: '分岐ドミノ', icon: '🔱', category: 'gimmick', rarity: 'rare', max: 3, stages: [1, 2], minLevel: 4,
+    name: '分岐ドミノ', icon: '🔱', category: 'gimmick', rarity: 'rare', max: 3, stages: [] /* 自由設計（将来のエンドレスモード）用 */, minLevel: 4,
     desc: (lv) => `コースの途中から枝分かれするコースを引ける（分岐 ${2 * lv}→${2 * lv + 2}か所）`,
   },
   minicar: {
-    name: 'ミニカー発射台', icon: '🏎', category: 'gimmick', rarity: 'rare', max: 3, stages: [1, 2], minLevel: 5,
+    name: 'ミニカー発射台', icon: '🏎', category: 'gimmick', rarity: 'rare', max: 3, stages: [] /* 自由設計（将来のエンドレスモード）用 */, minLevel: 5,
     desc: (lv) => `ドミノが押したミニカーが走って、離れた場所のドミノを倒す（${lv}→${lv + 1}台）`,
   },
   marble: {
-    name: 'ビー玉スロープ', icon: '🔵', category: 'gimmick', rarity: 'rare', max: 3, stages: [1, 2], minLevel: 4,
+    name: 'ビー玉スロープ', icon: '🔵', category: 'gimmick', rarity: 'rare', max: 3, stages: [] /* 自由設計（将来のエンドレスモード）用 */, minLevel: 4,
     desc: (lv) => `ドミノがビー玉を押し出し、坂を転がって先のドミノへ（${lv}→${lv + 1}基）`,
   },
   bell: {
-    name: '特殊ベル', icon: '🔔', category: 'gimmick', rarity: 'rare', max: 2, stages: [1, 2], minLevel: 4,
-    desc: () => 'コースに置くベル。連鎖で鳴ると、ルンバが充電台へ帰り小人が退避（S1では応援ボーナス）',
+    name: '特殊ベル', icon: '🔔', category: 'gimmick', rarity: 'rare', max: 2, stages: [2], minLevel: 4,
+    desc: () => 'コースの横に置く警報ベル。連鎖で鳴ると、ルンバが充電台へ帰りみんな退避',
   },
 
   // ---------- 特殊 ----------
   magnet: {
-    name: 'ドミノ磁石', icon: '🧲', category: 'special', rarity: 'rare', max: 3, stages: [1, 2], minLevel: 3,
+    name: 'ドミノ磁石', icon: '🧲', category: 'special', rarity: 'rare', max: 3, stages: [] /* 自由設計（将来のエンドレスモード）用 */, minLevel: 3,
     desc: (lv) => `連鎖後、床のボーナス星を半径${6 + 6 * lv}から吸い寄せて回収`,
   },
   clover: {
@@ -138,7 +138,7 @@ export const PARTS = {
 export const EVOLUTIONS = {
   massBuild: {
     name: '大量建設隊', icon: '🏗', requires: { builder: 3, basket: 2 },
-    desc: '建設小人が金ヘルメットの大量建設隊に。2倍の資材を背負い、1回で2個ずつ並べる',
+    desc: '建設担当が金ヘルメットの大量建設隊に。2倍の資材を背負い、1回で2個ずつ並べる',
   },
   fastLine: {
     name: '高速建設ライン', icon: '🛤', requires: { machine: 1, train: 1 },
@@ -168,9 +168,10 @@ export const GACHA = {
 };
 
 // XP 設定
+// 経験値：倒れたドミノ1枚 ＝ 1XP（「あと何枚でガチャ」がそのまま枚数になる）。
+// 自己ベストを超えた分は別枠のボーナス。中間ゴールは経験値ではなく確定ガチャ。
 export const XP = {
-  need: (lv) => Math.round(30 * Math.pow(1.27, lv - 1)),
-  // 1回の連鎖で倒れた数 n に対する経験値。長い連鎖ほど1枚あたりが増える
-  forRun: (n) => Math.round(n * (1 + n / 250)),
-  recordBonusPerDomino: 1, // 自己ベストを超えた部分 1枚あたり
+  need: (lv) => Math.round(25 + 14 * Math.pow(lv - 1, 1.35)),
+  forRun: (n) => n,
+  recordBonusPerDomino: 0.5,
 };
