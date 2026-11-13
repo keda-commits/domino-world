@@ -29,7 +29,7 @@ button { font-family: inherit; cursor: pointer; }
 .seg { display: flex; gap: 2px; background: var(--glass); border-radius: 12px; padding: 3px; }
 .seg button { border: none; background: transparent; }
 body.mode-run .hud:not(#hud-tr), body.mode-gacha .hud { opacity: 0; pointer-events: none; transform: translateY(-6px); }
-body.mode-run #hud-tr { opacity: .55; }
+body.mode-run #hud-tr { opacity: 0; pointer-events: none; }
 body.mode-gacha #hud-tr { opacity: 0; pointer-events: none; }
 
 #hud-tl { top: 12px; left: 14px; background: var(--glass); border-radius: 14px; padding: 7px 14px 8px; backdrop-filter: blur(6px); max-width: 360px; }
@@ -179,3 +179,18 @@ body.mode-gacha #hud-tr { opacity: 0; pointer-events: none; }
 #debug button { margin: 2px; font-size: 11px; padding: 3px 6px; border-radius: 8px; border: 1px solid #ccc; background: #fff; color: #333; }
 #debug .perf { font-family: monospace; white-space: pre; background: #222; color: #9f9; padding: 6px; border-radius: 8px; margin-top: 6px; }
 #debug select { font-size: 11px; }
+
+/* 本番中：進捗・新記録・視点切り替え（Ver.0.4） */
+#rh-prog { width: 260px; height: 6px; margin: 8px auto 0; border-radius: 4px; background: rgba(0,0,0,.45); position: relative; overflow: visible; }
+#rh-prog i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; background: linear-gradient(90deg, #ffb347, #ff6b3d); width: 0; }
+#rh-prog b { position: absolute; top: -3px; width: 2px; height: 12px; background: #ffe066; box-shadow: 0 0 6px #ffe066; display: none; }
+#rh-rec { margin-top: 6px; font-weight: 800; color: #ffe066; text-shadow: 0 2px 8px #000; animation: pulse .5s infinite alternate; }
+#run-view { position: absolute; bottom: 22px; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; z-index: 7; }
+#run-view button { background: rgba(20,22,30,.62); color: #fff; border: 1px solid rgba(255,255,255,.18); border-radius: 18px; padding: 7px 14px; font: inherit; font-weight: 700; cursor: pointer; backdrop-filter: blur(6px); }
+#run-view button.on { background: rgba(255,122,61,.85); border-color: transparent; }
+/* ホバーステータス */
+#hover-tip { position: fixed; z-index: 8; pointer-events: none; min-width: 150px; max-width: 260px; padding: 8px 11px; border-radius: 10px; background: rgba(18,20,28,.86); color: #f3f3f3; font-size: 12px; line-height: 1.5; border: 1px solid rgba(255,255,255,.14); box-shadow: 0 6px 18px rgba(0,0,0,.35); backdrop-filter: blur(6px); }
+#hover-tip h5 { margin: 0 0 3px; font-size: 13px; color: #fff; }
+#hover-tip .r { display: flex; justify-content: space-between; gap: 10px; }
+#hover-tip .r span:first-child { color: #9aa4b5; }
+#hover-tip .warn { color: #ff9f8a; }

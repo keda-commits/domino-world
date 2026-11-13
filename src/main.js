@@ -10,6 +10,8 @@ import { Renderer } from './render/renderer.js';
 import { GachaShow } from './render/gachaShow.js';
 import { loadSave, writeSave, clearSave, loadSettings, writeSettings, loadBackup } from './save.js';
 import { installDebug } from './debug.js';
+import { Hand } from './game/hand.js';
+import { describeAt } from './ui/hover.js';
 
 await initPhysics();
 
@@ -27,7 +29,6 @@ const gacha = new GachaShow({ scene, rig, audio, game, root: $('gacha3d') });
 const settings = { speed: 1, music: 0.45, sfx: 0.85, quality: 'mid', autoCam: true, seenHelp: false, gachaFast: false, ...loadSettings() };
 audio.setMusicVol(settings.music); audio.setSfxVol(settings.sfx);
 view.setQuality(settings.quality);
-rig.auto = settings.autoCam;
 gacha.speed = settings.gachaFast ? 2.5 : 1;
 
 // ---------------- セーブ ----------------
@@ -68,6 +69,7 @@ placeGachaMachine();
 
 function goStage(id) {
   if (game.mode !== 'build' || gacha.active) return;
+  resetAllInput();
   stageSaves[game.stageId] = game.serializeStage();
   game.loadStage(id, stageSaves[id]);
   placeGachaMachine();
@@ -84,6 +86,7 @@ function goStage(id) {
 function afterStageLoad() {
   if (game.stage.sun) view.useSun(game.stage.sun);
   const b = game.stage.bounds;
+  rig.bounds = b;
   ctx.stageSize = Math.max(b.maxX - b.minX, b.maxZ - b.minZ);
   updateCtx();
   // 最初は部屋全体 → すぐ建設現場へ寄る
@@ -105,20 +108,23 @@ function toast(text, sec = 2) {
 // ---------------- UI ----------------
 let paused = false;
 let speed = settings.speed || 1;
-let tidyHeld = false, tidyAcc = 0, holdAcc = 0;
+let tidyHeld = false, tidyAcc = 0;
 let tool = 'play';
 let pieceYaw = 0;
-let down = null, testSel = null;
+let testSel = null;
 const pieceGhost = new THREE.Mesh(new THREE.BoxGeometry(1, 0.3, 1), new THREE.MeshBasicMaterial({ color: '#7cd4ff', transparent: true, opacity: 0.35, depthWrite: false }));
 pieceGhost.visible = false;
 scene.add(pieceGhost);
+const frontBeacon = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1.4, 14, 20, 1, true), new THREE.MeshBasicMaterial({ color: '#ffb347', transparent: true, opacity: 0.35, depthWrite: false, side: THREE.DoubleSide }));
+frontBeacon.geometry.translate(0, 7, 0); frontBeacon.visible = false; scene.add(frontBeacon);
 
 const ui = new UI(game, {
   setTool: (t) => setTool(t),
   setSpeed: (s) => { speed = s; ui.setSpeed(s); settings.speed = s; writeSettings(settings); },
   setView: (v) => { updateCtx(); rig.setView(v, ctx); ui.setView(v); },
   resetCam: () => { updateCtx(); rig.reset(ctx); ui.setView('build'); },
-  toggleAutoCam: () => { rig.auto = !rig.auto; rig.autoSuspended = false; settings.autoCam = rig.auto; writeSettings(settings); ui.setAutoCam(rig.auto, false); },
+  setRunView: (v) => { rig.runView = v; ui.setRunView(v); },
+  onPanel: () => resetAllInput(),
   run: () => runNow(),
   rewind: () => { audio.ensure(); if (game.rewind()) toast(`⏪ 倒す前に戻った！（残り${game.rewinds}）`); },
   tidyHold: (v) => { audio.ensure(); tidyHeld = v; },
@@ -139,8 +145,6 @@ const ui = new UI(game, {
   gachaSkip: () => gacha.skip(),
 });
 ui.setSpeed(speed);
-ui.setAutoCam(rig.auto, false);
-rig.onChange(() => ui.setAutoCam(rig.auto, rig.autoSuspended));
 
 function setPaused(p) { paused = p; ui.setPaused(p); }
 function setTool(t) {
@@ -166,15 +170,12 @@ function runNow() {
 }
 
 // ---------------- イベント ----------------
-game.on('runStart', () => { audio.setSong('run'); rig.startRun(); $('flash').classList.add('hidden'); });
-game.on('goalStep', (e) => { ctx.event = e.pos.clone ? e.pos.clone() : new THREE.Vector3(e.pos.x, 0, e.pos.z); });
-game.on('special', (e) => { ctx.event = new THREE.Vector3(e.pos.x, 0, e.pos.z); });
-game.on('checkpoint', (cp) => { ctx.event = cp.pos.clone(); });
-game.on('goal', () => { ctx.event = game.goal.focus().clone(); game.workers.list.forEach((w) => w.act(3 + Math.random(), 'cheer', () => w.think())); });
-game.on('roomba', (k) => { if (k === 'depart' && game.run && game.roomba) ctx.event = game.roomba.pos.clone(); });
+game.on('runStart', (run) => { if (run.kind !== 'main') return; resetAllInput(); audio.setSong('run'); rig.startRun(); ui.setRunView('chase'); $('flash').classList.add('hidden'); });
+// 中間ゴール・ルンバ出動などでカメラは動かさない（通知と音だけ。連鎖の先頭を追い続ける）
+game.on('goal', () => { game.workers.list.forEach((w) => w.act(3 + Math.random(), 'cheer', () => w.think())); });
 game.on('runEnd', (r) => {
   audio.setSong('build');
-  rig.endRun();
+  rig.endRun(); resetAllInput(); frontBeacon.visible = false;
   if (r.cleared) audio.goal(); else audio.fail();
   if (!r.cleared && r.stop) rig.focusOn(new THREE.Vector3(r.stop.x, 0, r.stop.z), 16, 1.0);
   ui.flash(r, () => startGacha(r));
@@ -188,6 +189,7 @@ function startGacha(r = null) {
   if (gacha.active) return;
   if (!game.progress.tickets.length) return postGacha(r);
   setTool('play');
+  resetAllInput();
   game.gachaActive = true;
   audio.setSong('build');
   gacha.start(() => { game.gachaActive = false; postGacha(r); });
@@ -201,22 +203,65 @@ function postGacha(r) {
   if (r && r.cleared && r.stage === 2 && !game.records[2].toldDog) { game.records[2].toldDog = true; ui.comingSoon(() => {}); }
 }
 
-// ---------------- 入力 ----------------
+// ---------------- 入力（Ver.0.4：状態を持つ入力処理） ----------------
+// idle → pending（押した直後。ドラッグかクリックか判定中）→ panning / rotating / grabbing
+// 本番中・ガチャ中・モーダル表示中は受け付けない。状態が変わるときは前の状態を必ず終了する
 const ray = new THREE.Raycaster();
 const ndc = new THREE.Vector2();
 const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 function setNdc(ev) { const r = canvas.getBoundingClientRect(); ndc.set(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1); }
 function floorPoint(ev) { setNdc(ev); ray.setFromCamera(ndc, camera); const p = new THREE.Vector3(); return ray.ray.intersectPlane(plane, p) ? p : null; }
+const DRAG_PX = 5;
+const input = { state: 'idle', pointerId: null, x: 0, y: 0, t: 0, hit: null, lastClick: null, mx: 0, my: 0 };
+const hand = new Hand(game, scene, camera);
+game.hand = hand;
+function inputLocked() { return gacha.active || (game.run && game.run.kind === 'main') || ui.modalOpen; }
+function endInput() {
+  if (input.state === 'grabbing') hand.release();
+  if (input.state === 'panning') rig.panEnd();
+  if (input.pointerId != null) { try { canvas.releasePointerCapture(input.pointerId); } catch { /* noop */ } }
+  if (input.state === 'grabbing') ui.hideHover();
+  input.state = 'idle'; input.pointerId = null; input.hit = null;
+  rig.setRotateButton(false);
+  canvas.style.cursor = '';
+}
+/** 入力状態とキーをすべて破棄（フォーカス喪失・モード遷移など） */
+function resetAllInput() { endInput(); rig.clearInput(); tidyHeld = false; ui.hideHover(); }
+/** カーソルの下：ドミノ → 資材置き場 → 何もない */
+function hitTest(ev) {
+  setNdc(ev); ray.setFromCamera(ndc, camera);
+  const dh = hand.pickDomino(ray);
+  const sh = hand.pickSupply(ray);
+  if (dh && (!sh || dh.point.distanceTo(camera.position) <= sh.point.distanceTo(camera.position) + 0.05)) return { kind: 'domino', d: dh.d, point: dh.point };
+  if (sh) return { kind: 'supply', supply: sh.kind, point: sh.point };
+  return null;
+}
+
+// Alt＋左ドラッグの回転は OrbitControls より先に判定する（capture）
+window.addEventListener('pointerdown', (ev) => {
+  if (ev.target !== canvas) return;
+  rig.setRotateButton(ev.button === 0 && ev.altKey && !inputLocked());
+}, true);
 
 canvas.addEventListener('pointerdown', (ev) => {
   audio.ensure();
-  if (gacha.active) return;
+  if (gacha.active || inputLocked()) return;
   if (ev.button === 2 && tool.startsWith('piece:')) { setTool('play'); return; }
-  if (ev.button !== 0) return;
-  down = { x: ev.clientX, y: ev.clientY, t: performance.now(), moved: false, holding: false, p: floorPoint(ev) };
+  if (ev.button !== 0) { endInput(); return; }
+  endInput();
+  if (ev.altKey) { input.state = 'rotating'; rig.setRotateButton(true); return; } // OrbitControls が回す
+  input.state = 'pending';
+  input.pointerId = ev.pointerId;
+  try { canvas.setPointerCapture(ev.pointerId); } catch { /* noop */ }
+  input.x = ev.clientX; input.y = ev.clientY; input.t = performance.now();
+  input.hit = tool === 'play' ? hitTest(ev) : null;
 });
+
 canvas.addEventListener('pointermove', (ev) => {
-  if (gacha.active) { setNdc(ev); gacha.pick(ndc, camera, false); canvas.style.cursor = gacha.hovered ? 'pointer' : 'default'; return; }
+  input.mx = ev.clientX; input.my = ev.clientY;
+  setNdc(ev); ray.setFromCamera(ndc, camera); hand.setRay(ray.clone ? ray : ray);
+  if (gacha.active) { gacha.pick(ndc, camera, false); canvas.style.cursor = gacha.hovered ? 'pointer' : 'default'; return; }
+  if (inputLocked()) { ui.hideHover(); return; }
   const p = floorPoint(ev);
   if (p && tool.startsWith('piece:')) {
     const type = tool.slice(6);
@@ -225,17 +270,59 @@ canvas.addEventListener('pointermove', (ev) => {
     pieceGhost.rotation.y = pieceYaw;
     pieceGhost.material.color.set(game.canPlacePiece(type, p.x, p.z, pieceYaw).ok ? '#7cd4ff' : '#ff6b6b');
   }
-  if (down && Math.hypot(ev.clientX - down.x, ev.clientY - down.y) > 6) down.moved = true;
+  setNdc(ev);
+  if (input.state === 'pending' && Math.hypot(ev.clientX - input.x, ev.clientY - input.y) > DRAG_PX) {
+    const h = input.hit;
+    if (h && h.kind === 'domino' && !h.d.removed) { hand.grab(h.d, h.point); input.state = 'grabbing'; }
+    else if (h && h.kind === 'supply' && h.supply !== 'empty' && hand.grabFromSupply(h.supply, h.point)) input.state = 'grabbing';
+    else {
+      input.state = 'panning';
+      const cur = ndc.clone();
+      setNdc({ clientX: input.x, clientY: input.y }); rig.panStart(ndc);
+      ndc.copy(cur);
+    }
+  }
+  if (input.state === 'panning') { rig.panMove(ndc); canvas.style.cursor = 'move'; }
+  if (input.state === 'grabbing') { canvas.style.cursor = 'grabbing'; hoverHeld(); }
+  else if (input.state === 'idle') hoverAt(ev);
+  else ui.hideHover();
 });
-window.addEventListener('pointerup', (ev) => {
-  if (gacha.active && ev.button === 0 && ev.target === canvas) { setNdc(ev); gacha.pick(ndc, camera, true); return; }
-  if (!down || ev.button !== 0) return;
-  const d = down; down = null;
-  if (d.holding || d.moved || performance.now() - d.t > 400) return;
+
+function finishPress(ev) {
+  if (input.pointerId != null && ev.pointerId !== input.pointerId) return;
+  const st = input.state, h = input.hit;
+  if (st === 'grabbing') { const r = hand.release(); if (r && r.speed > 9) fx.floatAt(new THREE.Vector3().copy(r.d.body.translation()).setY(1.6), 'ビュンッ！', '', 0.6); endInput(); return; }
+  if (st === 'pending') {
+    const now = performance.now();
+    const lc = input.lastClick;
+    const dbl = lc && now - lc.t < 320 && Math.hypot(ev.clientX - lc.x, ev.clientY - lc.y) < 10;
+    if (dbl) {
+      input.lastClick = null;
+      if (lc.hit && lc.hit.kind === 'domino') hand.flick(lc.hit.d, lc.hit.point); // ドミノ上：デコピン
+      else if (!h || h.kind !== 'domino') { const p = floorPoint(ev); if (p) rig.focusOn(p, null, 0.6); } // 空き場所：注目
+    } else {
+      input.lastClick = { t: now, x: ev.clientX, y: ev.clientY, hit: h };
+      if (tool !== 'play') toolClick(ev);
+    }
+  }
+  endInput();
+}
+canvas.addEventListener('pointerup', (ev) => { if (gacha.active && ev.button === 0) { setNdc(ev); gacha.pick(ndc, camera, true); return; } if (ev.button === 0) finishPress(ev); else if (input.state === 'rotating') endInput(); });
+window.addEventListener('pointerup', (ev) => { if (ev.target !== canvas && input.state !== 'idle') finishPress(ev); });
+canvas.addEventListener('pointercancel', () => endInput());
+canvas.addEventListener('lostpointercapture', () => { if (input.state === 'grabbing' || input.state === 'panning') endInput(); });
+canvas.addEventListener('pointerleave', () => { if (input.state === 'idle') ui.hideHover(); });
+canvas.addEventListener('wheel', (ev) => {
+  // つかんでいる間のホイール：高さ（Shift で傾き）。カメラのズームは止める
+  if (input.state === 'grabbing') { ev.preventDefault(); ev.stopImmediatePropagation(); if (ev.shiftKey) hand.tiltBy(-Math.sign(ev.deltaY || ev.deltaX) * 0.12); else hand.adjustLift(-Math.sign(ev.deltaY) * 0.18); }
+}, { passive: false, capture: true });
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+/** 置く以外の道具のクリック */
+function toolClick(ev) {
   const p = floorPoint(ev);
   if (!p) return;
-  if (tool === 'play') { if (!game.manualTidy(p)) game.manualPlace(p); }
-  else if (tool.startsWith('piece:')) game.placePiece(tool.slice(6), p.x, p.z, pieceYaw);
+  if (tool.startsWith('piece:')) game.placePiece(tool.slice(6), p.x, p.z, pieceYaw);
   else if (tool === 'stopper') {
     let best = null, bd = 2.2 * 2.2;
     for (const s of game.stoppers) { const dd = (s.x - p.x) ** 2 + (s.z - p.z) ** 2; if (dd < bd) { bd = dd; best = s; } }
@@ -252,44 +339,68 @@ window.addEventListener('pointerup', (ev) => {
       setTimeout(() => { game.planView.selection = null; }, 800);
     }
   }
-});
-canvas.addEventListener('dblclick', (ev) => { if (gacha.active) return; const p = floorPoint(ev); if (p) rig.focusOn(p, null, 0.6); });
-canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+}
 
-const keyMap = { arrowup: 'w', arrowdown: 's', arrowleft: 'a', arrowright: 'd', w: 'w', a: 'a', s: 's', d: 'd' };
+// ---------------- ホバーステータス ----------------
+let hoverT = 0;
+function hoverAt(ev) {
+  if (performance.now() - hoverT < 70) return; // 間引いてチラつきを防ぐ
+  hoverT = performance.now();
+  setNdc(ev); ray.setFromCamera(ndc, camera);
+  const info = describeAt(game, hand, ray, camera);
+  if (!info) { ui.hideHover(); return; }
+  ui.showHover(info, ev.clientX, ev.clientY);
+}
+function hoverHeld() {
+  const h = hand.held;
+  if (!h) return;
+  ui.showHover({ title: '✋ つかんでいる', rows: [['高さ', 'ホイール'], ['向き', 'Q / E'], ['傾き', 'Shift＋ホイール']], note: h.guide ? 'マスの上：そっと離すと立つ' : '勢いよく離すと投げる' }, input.mx, input.my, true);
+}
+
+// ---------------- キー ----------------
 window.addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-  if (k === '`' || (k === 'd' && e.ctrlKey && e.shiftKey)) { debug.toggle(); e.preventDefault(); return; }
+  if (k === '`' || (e.code === 'KeyD' && e.ctrlKey && e.shiftKey)) { debug.toggle(); e.preventDefault(); return; }
   audio.ensure();
   if (gacha.active) {
     if (k === ' ') { gacha.skip(); e.preventDefault(); }
-    if (['1', '2', '3', '4', '5'].includes(k)) gacha.chooseIndex(+k - 1);
+    if (['Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5'].includes(e.code)) gacha.chooseIndex(+e.code.slice(5) - 1);
     return;
   }
   if (ui.modalOpen) return;
-  if (keyMap[k]) { rig.keys.add(keyMap[k]); e.preventDefault(); return; }
+  // 本番中は「俯瞰／連鎖追跡」の切り替えだけ
+  if (game.run && game.run.kind === 'main') {
+    if (e.code === 'KeyO' || e.code === 'KeyF') { ui.h.setRunView(e.code === 'KeyO' ? 'overview' : 'chase'); e.preventDefault(); }
+    return;
+  }
+  if (input.state === 'grabbing' && (e.code === 'KeyQ' || e.code === 'KeyE')) { hand.rotate(e.code === 'KeyQ' ? 0.2 : -0.2); e.preventDefault(); return; }
+  if (rig.isMoveKey(e.code) && !e.ctrlKey && !e.metaKey && !e.altKey) { rig.keyDown(e.code); e.preventDefault(); return; }
   if (e.repeat) return;
-  switch (k) {
-    case '1': setTool('play'); break;
-    case '2': setTool('pieces'); break;
-    case '3': setTool('test'); break;
-    case '4': setTool('stopper'); break;
-    case 'q': pieceYaw += Math.PI / 12; break;
-    case 'e': pieceYaw -= Math.PI / 12; break;
-    case 'enter': runNow(); break;
-    case 'r': tidyHeld = true; break;
-    case 'p': setPaused(!paused); break;
-    case 'b': ui.h.setView('build'); break;
-    case 'v': ui.h.setView('view'); break;
-    case 'f': ui.h.setView('chain'); break;
-    case 'o': ui.h.setView('overview'); break;
-    case 'home': ui.h.resetCam(); break;
-    case 'escape': setTool('play'); ui.togglePanel(false); break;
+  switch (e.code) {
+    case 'Digit1': setTool('play'); break;
+    case 'Digit2': setTool('pieces'); break;
+    case 'Digit3': setTool('test'); break;
+    case 'Digit4': setTool('stopper'); break;
+    case 'KeyQ': pieceYaw += Math.PI / 12; break;
+    case 'KeyE': pieceYaw -= Math.PI / 12; break;
+    case 'Enter': case 'NumpadEnter': runNow(); break;
+    case 'KeyR': tidyHeld = true; break;
+    case 'KeyP': setPaused(!paused); break;
+    case 'KeyB': ui.h.setView('build'); break;
+    case 'KeyV': ui.h.setView('view'); break;
+    case 'KeyF': ui.h.setView('chain'); break;
+    case 'KeyO': ui.h.setView('overview'); break;
+    case 'Home': ui.h.resetCam(); break;
+    case 'Escape': setTool('play'); ui.togglePanel(false); resetAllInput(); break;
   }
 });
-window.addEventListener('keyup', (e) => { const k = e.key.toLowerCase(); if (keyMap[k]) rig.keys.delete(keyMap[k]); if (k === 'r') tidyHeld = false; });
-window.addEventListener('blur', () => { rig.keys.clear(); tidyHeld = false; });
+window.addEventListener('keyup', (e) => { rig.keyUp(e.code); if (e.code === 'KeyR') tidyHeld = false; });
+// キー入力の取り残し対策：どんな理由でもフォーカスを失ったら全部破棄
+window.addEventListener('blur', () => resetAllInput());
+document.addEventListener('visibilitychange', () => { if (document.hidden) resetAllInput(); });
+window.addEventListener('pagehide', () => resetAllInput());
+document.addEventListener('compositionstart', () => rig.clearInput());
 window.addEventListener('resize', () => view.resize());
 setInterval(() => save(), 10000);
 window.addEventListener('beforeunload', () => save());
@@ -320,18 +431,20 @@ function frame(now) {
   if (perf.acc >= 0.5) { perf.fps = perf.frames / perf.acc; perf.frames = 0; perf.acc = 0; }
   const t0 = performance.now();
   if (!paused) {
-    if (down && !down.moved && !down.holding && tool === 'play' && now - down.t > 380) down.holding = true;
-    if (down && down.holding && tool === 'play') { holdAcc += real; while (holdAcc > 0.13) { holdAcc -= 0.13; game.manualPlace(down.p); } }
     if (tidyHeld) { tidyAcc += real * 6; while (tidyAcc >= 1) { tidyAcc -= 1; game.manualRestoreStep(); } }
     const dt = real * speed;
     const n = Math.max(1, Math.ceil(dt / 0.034));
     for (let i = 0; i < n; i++) game.update(dt / n);
+    hand.update(real);
   }
   perf.update = performance.now() - t0;
   updateCtx();
   // 連鎖の勢い（音のうなり）
   if (game.run) { rateT += real; if (rateT > 0.25) { rate = (game.run.count - lastCount) / rateT; lastCount = game.run.count; rateT = 0; } audio.chainSwell(rate); }
   else { lastCount = 0; if (rate) { rate = 0; audio.chainSwell(0); } }
+  // 俯瞰中は連鎖の先頭に光の柱を立てて位置を示す
+  frontBeacon.visible = !!(game.run && game.run.kind === 'main' && rig.runView === 'overview' && ctx.front);
+  if (frontBeacon.visible) { frontBeacon.position.set(ctx.front.x, 0, ctx.front.z); const k = 1 + Math.sin(now * 0.008) * 0.15; frontBeacon.scale.set(k, 1, k); }
   const cam = rig.update(real, ctx);
   gacha.update(real, camera, window.innerWidth, window.innerHeight);
   view.setDof(cam.dof && settings.quality === 'high', cam.focusDist);

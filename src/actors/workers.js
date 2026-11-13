@@ -296,6 +296,31 @@ export class Gnome {
       }
     }
   }
+  /** 投げたドミノが当たった（dx,dz：飛んできた向き、sp：速さ） */
+  hitBy(dx, dz, sp) {
+    const g = this.game;
+    this.hitCool = 0.8;
+    // 少し押される（物理的にのけぞる）
+    const push = Math.min(0.6, sp * 0.04);
+    this.pos.x += dx * push; this.pos.z += dz * push;
+    g.stats.hitReactions = (g.stats.hitReactions || 0) + 1;
+    if (sp > 9 && this.state !== 'trip') {
+      // 強く当たった：転ぶ（持っていた資材を落とし、近くのドミノを巻き込むことも）
+      this.trip();
+      this.say(['いてて…', 'うわぁ！', 'なにするの！'][Math.floor(Math.random() * 3)], 'warn');
+      const near = g.nearestSlot(this.pos.x, this.pos.z, 1.2);
+      if (near && near.domino && !near.domino.toppled && Math.random() < 0.5) g.dominoes.push(near.domino, dx, dz, 0.05);
+    } else {
+      // 軽く当たった：驚いて飛び上がり、作業を少し中断
+      this.releaseJob();
+      if (this.m.held) this.m.held.visible = false;
+      this.state = 'act'; this.pose = 'surprised'; this.poseT = 0; this.timer = 0.9;
+      this.onDone = () => this.think();
+      this.say(['いてっ！', 'わっ！', 'こら〜！', 'びっくりした！'][Math.floor(Math.random() * 4)], '');
+      this.yaw = Math.atan2(-dx, -dz); // 飛んできた方を向く
+    }
+    g.audio.squeak && g.audio.squeak(1.3);
+  }
   oops() {
     this.state = 'act'; this.pose = 'oops'; this.poseT = 0; this.timer = 1.2;
     this.onDone = () => this.think();

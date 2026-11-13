@@ -17,7 +17,7 @@ export class UI {
     document.querySelectorAll('[data-speed]').forEach((b) => (b.onclick = () => h.setSpeed(+b.dataset.speed)));
     document.querySelectorAll('[data-view]').forEach((b) => (b.onclick = () => h.setView(b.dataset.view)));
     $('b-cam-reset').onclick = () => h.resetCam();
-    $('b-autocam').onclick = () => h.toggleAutoCam();
+    document.querySelectorAll('[data-rv]').forEach((b) => (b.onclick = () => h.setRunView(b.dataset.rv)));
     $('b-run').onclick = () => h.run();
     $('b-rewind').onclick = () => h.rewind();
     const tidy = $('b-tidy');
@@ -53,10 +53,7 @@ export class UI {
   setPaused(p) { $('b-pause').textContent = p ? '▶' : '⏸'; $('b-pause').classList.toggle('on', p); }
   setSpeed(s) { document.querySelectorAll('[data-speed]').forEach((b) => b.classList.toggle('on', +b.dataset.speed === s)); }
   setView(v) { document.querySelectorAll('[data-view]').forEach((b) => b.classList.toggle('on', b.dataset.view === v)); }
-  setAutoCam(a, suspended) {
-    $('b-autocam').classList.toggle('on', a);
-    $('autocam-chip').classList.toggle('hidden', !(a && suspended));
-  }
+  setRunView(v) { document.querySelectorAll('[data-rv]').forEach((b) => b.classList.toggle('on', b.dataset.rv === v)); }
 
   // ---------------- 定期更新 ----------------
   refresh() {
@@ -110,8 +107,15 @@ export class UI {
     const run = g.run;
     document.body.classList.toggle('mode-run', !!run && run.kind === 'main');
     $('runhud').classList.toggle('hidden', !run);
+    $('run-view').classList.toggle('hidden', !(run && run.kind === 'main'));
     if (run) {
       $('rh-count').textContent = fmt(run.count);
+      const tot = g.course.allSlots.length || 1;
+      $('rh-prog').querySelector('i').style.width = `${Math.min(100, (Math.max(0, run.frontOrder + 1) / tot) * 100)}%`;
+      const best = (g.records[g.stageId] || {}).best || 0;
+      const bm = $('rh-prog').querySelector('b');
+      bm.style.display = best > 0 && best < tot ? 'block' : 'none'; bm.style.left = `${(best / tot) * 100}%`;
+      $('rh-rec').classList.toggle('hidden', !(run.kind === 'main' && best > 0 && run.count > best));
       $('rh-piggy').classList.toggle('hidden', !(g.piggy && run.kind === 'main'));
       if (g.piggy) $('rh-piggy').querySelector('b').textContent = fmt(run.piggy);
     }
@@ -149,6 +153,7 @@ export class UI {
   togglePanel(v) {
     const p = $('panel');
     const show = v ?? p.classList.contains('hidden');
+    if (this.h.onPanel) this.h.onPanel(show);
     p.classList.toggle('hidden', !show);
     if (show) this.tab(this.curTab);
   }
@@ -233,6 +238,20 @@ export class UI {
     $('dialog').classList.remove('hidden');
   }
   confirm(title, body, fn) { this.dialog(`<h2>${title}</h2><p>${body}</p>`, [{ label: 'はい', fn }, { label: 'やめる', cls: 'sub' }]); }
+  /** ホバーステータス（カーソルの近く。画面からはみ出さない・アイテムを隠さない位置） */
+  showHover(info, x, y, compact = false) {
+    const el = $('hover-tip');
+    const esc = (t) => String(t).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]);
+    const html = `<h5 class="${info.warn ? 'warn' : ''}">${esc(info.title)}</h5>` + (info.rows || []).map(([a, b]) => `<div class="r"><span>${esc(a)}</span><span>${esc(b)}</span></div>`).join('') + (info.note && !compact ? `<div style="margin-top:4px;color:#c9d1dd">${esc(info.note).split('\n').join('<br>')}</div>` : info.note ? `<div style="margin-top:3px;color:#8ff0a4">${esc(info.note)}</div>` : '');
+    if (html !== this._hoverHtml) { el.innerHTML = html; this._hoverHtml = html; }
+    el.classList.remove('hidden');
+    const w = el.offsetWidth, h = el.offsetHeight;
+    let px = x + 22, py = y + 18;
+    if (px + w > window.innerWidth - 8) px = x - w - 22;
+    if (py + h > window.innerHeight - 8) py = y - h - 14;
+    el.style.left = `${Math.max(8, px)}px`; el.style.top = `${Math.max(8, py)}px`;
+  }
+  hideHover() { $('hover-tip').classList.add('hidden'); this._hoverHtml = null; }
   get modalOpen() { return !$('dialog').classList.contains('hidden'); }
   comingSoon(fn) {
     this.dialog(`<div class="dog"><div class="paw">🐾</div><div class="soon">COMING SOON</div><h2>STAGE 3　巨大な犬</h2><p>ドミノの前にしっぽを振る巨大な犬が現れる…！<br>次回、「おすわりベル」で犬をおすわりさせながら、もっと長い連鎖に挑め！</p></div>`, [{ label: 'たのしみ！', fn }]);

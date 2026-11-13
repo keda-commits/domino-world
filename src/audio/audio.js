@@ -134,6 +134,8 @@ export class Audio {
     this.tone(70, 0.9, 'sawtooth', 0.09, 0, 55); this.tone(110, 0.9, 'square', 0.03, 0, 90);
     for (let i = 0; i < 3; i++) { this.tone(392, 0.16, 'square', 0.05, 0.25 + i * 0.36, 392); this.tone(311, 0.16, 'square', 0.05, 0.43 + i * 0.36, 311); }
   }
+  /** デコピンの「ピンッ」 */
+  flick() { this.tone(2200, 0.05, 'triangle', 0.12, 0, 3200); this.tone(1400, 0.08, 'sine', 0.06, 0.01, 900); }
   gachaSpin() { for (let i = 0; i < 8; i++) this.tone(600 + i * 60, 0.05, 'square', 0.04, i * 0.07); }
   gachaReveal(rarity) {
     const tbl = { common: [659, 784], rare: [659, 784, 988], epic: [659, 831, 988, 1319], legendary: [523, 659, 784, 1046, 1319, 1568, 2093] };

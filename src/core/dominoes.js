@@ -27,6 +27,7 @@ export class Dominoes {
     this.scene = scene;
     this.physics = physics;
     this.list = new Set();
+    this.byIdx = new Map(); // InstancedMesh の番号 → ドミノ（手でつかむときのレイ判定用）
     this.free = [];
     for (let i = MAX - 1; i >= 0; i--) this.free.push(i);
     // 描画モデル（物理コライダーとは別。少しだけ角を丸めた実物寸法）
@@ -92,6 +93,7 @@ export class Dominoes {
       drop: opts.drop ? 0 : 1, w, accident: false,
     };
     this.list.add(d);
+    this.byIdx.set(idx, d);
     const color = opts.color || (kind === 'present' ? '#ffcf3a' : kind === 'clover' ? '#3fd16b' : PALETTE[(opts.colorIndex ?? d.id) % 7]);
     d.color = color;
     this.mesh.setColorAt(idx, this._c.set(color));
@@ -135,6 +137,7 @@ export class Dominoes {
   remove(d) {
     if (!this.list.has(d)) return;
     this.list.delete(d);
+    if (this.byIdx.get(d.idx) === d) this.byIdx.delete(d.idx);
     this.physics.world.removeRigidBody(d.body);
     this.mesh.setMatrixAt(d.idx, this._zero);
     this.free.push(d.idx);
@@ -175,6 +178,7 @@ export class Dominoes {
       if (d.drop < 1) { d.drop = Math.min(1, d.drop + dt * 6); this.writeMatrix(d); }
       if (d.frozen) continue;
       const b = d.body;
+      if (d.held) { this.writeMatrix(d); awake++; continue; } // 手で持っている間は転倒判定しない
       if (b.isSleeping()) continue;
       awake++;
       this.writeMatrix(d);

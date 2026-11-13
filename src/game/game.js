@@ -51,6 +51,8 @@ export class Game {
     this.stageId = id;
     this.def = STAGES[id];
     this.physics = new Physics();
+    this.physics.onStep((dt) => this.hand && this.hand.step(dt));
+    if (this.hand) { this.hand.held = null; this.hand.flying.clear(); }
     this.stage = createStage(id, this.scene, this.physics);
     this.stage.extraBlockers = [(x, z, m, forRoomba) => this.pieceBlocks(x, z, m, forRoomba)];
     this.dominoes = new Dominoes(this.scene, this.physics);
@@ -420,6 +422,28 @@ export class Game {
     return true;
   }
 
+  /**
+   * 手で置いたドミノ：空いた設計図のマスの上で、まっすぐ立って止まったらそのマスのドミノとして扱う
+   * （位置や向きの補正はしない。立ち方が悪ければ数えられない）
+   */
+  adoptLoose() {
+    for (const d of this.dominoes.list) {
+      if (d.slot || d.held || d.removed || d.toppled) continue;
+      if (!d.body.isSleeping() && !this.isStill(d)) continue;
+      if (this.dominoes.upY(d) < 0.97) continue;
+      const t = d.body.translation();
+      const sl = this.nearestSlot(t.x, t.z, 0.2);
+      if (!sl || sl.domino) continue;
+      const r = d.body.rotation();
+      const yaw = Math.atan2(2 * (r.w * r.y + r.x * r.z), 1 - 2 * (r.y * r.y + r.x * r.x));
+      if (Math.abs(Math.sin(yaw - sl.yaw)) > 0.26) continue; // 向きが15°以上ずれていたら連鎖しにくいので数えない
+      sl.domino = d; d.slot = sl; d.standing = true; this.unbuiltDirty = true;
+      this.stats.handPlaced = (this.stats.handPlaced || 0) + 1;
+      this.fx.floatAt(tmp.set(t.x, 1.4, t.z), '✓', 'coin', 0.6);
+      this.audio.click(1.2, Math.max(0, sl.order));
+    }
+  }
+
   /** ほぼ止まっているか（スリープしない寄りかかりも含む） */
   isStill(d) {
     if (d.frozen || !d.body || d.body.isSleeping()) return true;
@@ -439,7 +463,7 @@ export class Game {
     for (const e of this.dominoes.list) if (e.slot && !e.removed && (e.toppled || !this.dominoes.isStandingAt(e, e.slot))) { const t = e.body.translation(); lying.push({ e, x: t.x, z: t.z, o: this.ord(e.slot) }); }
     const covered = (d) => { const o = this.ord(d.slot); for (const l of lying) if (l.e !== d && l.o < o && (l.x - d.slot.x) ** 2 + (l.z - d.slot.z) ** 2 < 0.36) return true; return false; };
     for (const d of this.dominoes.list) {
-      if (!d.slot || d.claim || d.removed) continue;
+      if (!d.slot || d.claim || d.removed || d.held) continue;
       // 倒れた・寄りかかって傾いた・ずれたドミノ（スロットにきちんと立っていない）
       if (!d.toppled && this.dominoes.isStandingAt(d, d.slot)) continue;
       if (covered(d)) continue;
@@ -486,7 +510,8 @@ export class Game {
     if (this.mode !== 'build') return null;
     let best = null, bd = Infinity;
     for (const d of this.dominoes.list) {
-      if (d.claim || d.removed) continue;
+      if (d.claim || d.removed || d.held) continue;
+      if (!d.slot && d.releasedAt != null && this.time - d.releasedAt < 12) continue; // プレイヤーが置いたばかりのものは片付けない
       let loose = !d.slot;
       if (d.slot && !this.dominoes.isStandingAt(d, d.slot) && this.isStill(d)) {
         const t = d.body.translation();
@@ -1262,6 +1287,7 @@ export class Game {
   update(dt) {
     this.time += dt;
     this.physics.update(dt);
+    if (this.mode === 'build' && (this._adoptT = (this._adoptT || 0) - dt) <= 0) { this._adoptT = 0.3; this.adoptLoose(); }
     this.dominoes.update(dt);
     if (this.run) this.updateRun(dt);
     if (this.run && this.run.pendingCps.length) for (const cp of [...this.run.pendingCps]) this.onCheckpoint(cp);
