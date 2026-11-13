@@ -76,8 +76,10 @@ function afterStageLoad() {
   const s = game.def.start;
   rig.controls.target.set(s.x + 8, 0, s.z + 4);
   camera.position.set(s.x + 8 + 14, 22, s.z + 4 + 20);
-  rig.setMode('build');
-  ui.setCam('build');
+  // コースが空なら全体を見渡す俯瞰から（スタートとゴールの位置がわかるように）
+  const m0 = game.course.allSlots.length ? 'build' : 'overview';
+  rig.setMode(m0);
+  ui.setCam(m0);
   ui.suggested();
   ui.setTool('play');
   setTool('play');

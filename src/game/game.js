@@ -563,7 +563,7 @@ export class Game {
     if (!r) return null;
     this.dropDominoes(r.orphan);
     this.refreshCourse();
-    this.emit('courseChanged');
+    this.emit('courseChanged', r);
     return r;
   }
   branchesLeft() { return 2 * this.level('branch') - this.course.segments.filter((s) => s.from.type === 'branch').length; }

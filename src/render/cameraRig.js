@@ -35,7 +35,7 @@ export class CameraRig {
     this.mode = m;
     this.cut = null;
     if (m === 'overview') { this.dist = this.stageSize * 0.95; this.polar = 0.72; }
-    if (m === 'build') { this.dist = 24; this.polar = 0.95; }
+    if (m === 'build') { this.dist = 32; this.polar = 0.82; }
     if (m === 'chain') { this.dist = 16; this.polar = 1.0; }
     if (m === 'gnome') { this.dist = 5; this.polar = 1.15; }
     this.snap = true;
