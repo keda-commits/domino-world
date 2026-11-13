@@ -73,7 +73,41 @@ export class FX {
     }
   }
 
+  /** ストッパーを投げる放物線（着地でコールバック） */
+  throwArc(from, to, time, cb) {
+    if (!this.arcs) this.arcs = [];
+    const m = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.55, 0.12), new THREE.MeshStandardMaterial({ color: '#ffd21f' }));
+    m.position.copy(from);
+    this.scene.add(m);
+    this.arcs.push({ m, a: from.clone().setY(1), b: to.clone(), t: 0, time, cb });
+  }
+  /** 経験値オーブが吸い寄せられる演出 */
+  suck(mesh, target) {
+    if (!this.sucks) this.sucks = [];
+    this.sucks.push({ mesh, a: mesh.position.clone(), b: target.clone(), t: -Math.random() * 0.4 });
+  }
+
   update(dt, w, h) {
+    for (let i = (this.arcs || []).length - 1; i >= 0; i--) {
+      const a = this.arcs[i];
+      a.t += dt / a.time;
+      const k = Math.min(1, a.t);
+      a.m.position.lerpVectors(a.a, a.b, k);
+      a.m.position.y += Math.sin(k * Math.PI) * 4;
+      a.m.rotation.x += dt * 14;
+      if (k >= 1) { this.scene.remove(a.m); this.arcs.splice(i, 1); a.cb && a.cb(); }
+    }
+    for (let i = (this.sucks || []).length - 1; i >= 0; i--) {
+      const s = this.sucks[i];
+      s.t += dt * 1.3;
+      if (s.t < 0) continue;
+      const k = Math.min(1, s.t);
+      const e = k * k;
+      s.mesh.position.lerpVectors(s.a, s.b, e);
+      s.mesh.position.y += Math.sin(k * Math.PI) * 2.5;
+      s.mesh.scale.setScalar(1 - e * 0.7);
+      if (k >= 1) { s.mesh.visible = false; this.sucks.splice(i, 1); this.floatAt(s.b, '+XP', 'coin', 0.6, 0.8); }
+    }
     const v = this._v;
     for (let i = this.items.length - 1; i >= 0; i--) {
       const it = this.items[i];

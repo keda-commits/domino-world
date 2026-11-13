@@ -1,7 +1,7 @@
 {
   "name": "domino-world",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,9 +9,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "three": "^0.170.0"
+    "@dimforge/rapier3d-compat": "0.19.3",
+    "three": "0.170.0"
   },
   "devDependencies": {
-    "vite": "^6.0.7"
+    "vite": "6.0.7"
   }
 }

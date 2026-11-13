@@ -12,97 +12,119 @@
   <div id="app">
     <canvas id="c"></canvas>
     <div id="vignette"></div>
-    <div id="speedlines"></div>
 
-    <!-- 左上：ステータス -->
-    <div id="stats" class="panel">
-      <div class="title">世界一長いドミノ倒し <small>v0.1</small></div>
-      <div class="row big"><span>コイン</span><b id="s-coins">0</b></div>
+    <div id="loading"><div class="ld-title">世界一長いドミノ倒し</div><div class="ld-sub">物理エンジンを準備中…</div></div>
+
+    <!-- 上：ステージと経験値 -->
+    <div id="top">
+      <div id="stage-name" class="chip"></div>
+      <div id="xp" class="panel">
+        <div class="xp-row"><b id="xp-lv">Lv.1</b><span id="xp-text">ドミノ経験値 0 / 30</span><span id="xp-left">あと30枚でガチャ！</span><span id="xp-tickets" class="hidden"></span></div>
+        <div class="xp-bar"><div id="xp-fill"></div></div>
+      </div>
+      <div id="goal-text" class="chip sub"></div>
+    </div>
+
+    <!-- 左：状況 -->
+    <div id="status" class="panel">
+      <div class="row big"><span>建設進捗</span><b id="s-progress">0 / 0</b></div>
+      <div class="pbar"><div id="s-pfill"></div><div id="s-ptarget"></div></div>
+      <div class="row"><span>目標</span><b id="s-target">300個</b></div>
+      <div class="row"><span>一度の最大連鎖</span><b id="s-best">0</b></div>
+      <div class="row"><span>累計転倒数</span><b id="s-total">0</b></div>
       <div class="row"><span>ドミノ在庫</span><b id="s-stock">0</b></div>
-      <div class="row sub"><span>前線資材</span><b id="s-crate">0</b></div>
       <hr />
-      <div class="row"><span>現在の連鎖</span><b id="s-chain">0</b></div>
-      <div class="row"><span>建設済み残り</span><b id="s-buffer">0</b></div>
-      <div class="row"><span>建設速度</span><b id="s-build">0.0 個/秒</b></div>
-      <div class="row"><span>転倒速度</span><b id="s-fall">0.0 個/秒</b></div>
-      <hr />
-      <div class="row sub"><span>累計連鎖距離</span><b id="s-dist">0 m</b></div>
-      <div class="row sub"><span>最長連鎖</span><b id="s-best">0</b></div>
-      <div class="row sub"><span>連続運転の最長</span><b id="s-bestcont">0</b></div>
+      <div class="sec">現場の稼働</div>
+      <div id="s-crew" class="crew"></div>
+      <div class="row sub"><span>ストッパー</span><b id="s-stoppers">0</b></div>
+      <div id="s-roomba" class="roomba hidden"></div>
+      <div id="s-alarm" class="alarm hidden">⚠ 警報発令中</div>
+    </div>
+
+    <!-- 右：設計ツールとビルド -->
+    <div id="tools" class="panel">
+      <div class="tabs"><button data-tab="design" class="on">設計</button><button data-tab="build">ビルド</button></div>
+      <div id="tab-design">
+        <div class="tool-grid">
+          <button data-tool="play" class="tool on" title="クリックで置く・片付ける (1)">🖐 置く</button>
+          <button data-tool="draw" class="tool" title="ドラッグでコースを描く (2)">✏ 描く</button>
+          <button data-tool="erase" class="tool" title="クリックした所から先を消す (3)">🧽 消す</button>
+          <button data-tool="test" class="tool" title="区間テスト (4)">🧪 区間テスト</button>
+          <button data-tool="stopper" class="tool" title="ストッパーのロック切替 (5)">🔒 ストッパー</button>
+        </div>
+        <div class="sec">配置パーツ <small>（Q/E で回転）</small></div>
+        <div id="piece-list" class="piece-list"></div>
+        <div class="sec">おすすめルート</div>
+        <div id="sug-list" class="sug-list"></div>
+        <button id="b-clear-course" class="small danger">コースを全部消す</button>
+        <div id="tool-hint" class="hint"></div>
+      </div>
+      <div id="tab-build" class="hidden">
+        <div id="build-list" class="build-list"></div>
+      </div>
     </div>
 
     <!-- 右上：システム -->
     <div id="sys" class="panel">
       <button id="b-pause" title="一時停止 (P)">⏸</button>
-      <div class="seg">
-        <button data-speed="1" class="on">1×</button>
-        <button data-speed="2">2×</button>
-        <button data-speed="4">4×</button>
-      </div>
-      <button id="b-follow" class="on" title="連鎖の先端を追尾 (F)">🎥 追尾</button>
-      <button id="b-overview" title="全体を見る (V)">🗺 全体</button>
-      <button id="b-sound" title="音のON/OFF (M)">🔊</button>
-      <button id="b-help" title="操作説明 (H)">？</button>
-      <button id="b-reset" title="セーブを消して最初から">↺</button>
+      <div class="seg"><button data-speed="1" class="on">1×</button><button data-speed="2">2×</button><button data-speed="4">4×</button></div>
+      <select id="cam-mode" title="カメラ (C で切替)">
+        <option value="build">🎥 建設現場</option><option value="chain">🎥 連鎖追跡</option><option value="overview">🎥 俯瞰</option><option value="gnome">🎥 小人観察</option><option value="free">🎥 自由</option>
+      </select>
+      <button id="b-autocam" class="on" title="連鎖中の自動カメラ">🎬 自動</button>
+      <button id="b-save" title="セーブ">💾</button>
+      <button id="b-stages" title="ステージ">🗺</button>
+      <button id="b-settings" title="設定">⚙</button>
+      <button id="b-help" title="遊び方 (H)">？</button>
     </div>
 
     <div id="banner"></div>
-    <div id="warning">⚠ 連鎖が建設隊に追いつく！</div>
-
-    <!-- 下：レースバー -->
-    <div id="race" class="panel hidden">
-      <div class="race-label"><span>連鎖の波</span><span id="race-text">余裕 0 個</span><span>建設の最前線</span></div>
-      <div class="race-track"><div id="race-fill"></div><div id="race-wave">🌊</div><div id="race-front">👷</div></div>
+    <div id="runhud" class="hidden">
+      <div class="rh-count"><span id="rh-count">0</span><small id="rh-target"> / 300</small></div>
+      <div id="rh-piggy" class="hidden">🐷 貯金 <b>0</b></div>
+      <div id="rh-shot" class="rh-shot"></div>
     </div>
 
-    <!-- 下中央：メイン操作 -->
+    <!-- 下：メイン操作 -->
     <div id="controls">
-      <button id="b-place" class="big-btn place" title="最前線にドミノを置く (Space長押しで連続)">🧱 置く<small>Space</small></button>
-      <button id="b-start" class="big-btn start" title="連鎖スタート (Enter)">▶ 倒す！<small>Enter</small></button>
-      <button id="b-cont" class="big-btn cont" title="連続運転モード (C)">♾ 連続運転<small id="cont-sub">C</small></button>
-      <button id="b-od" class="big-btn od" title="オーバードライブ (O)">
-        <span class="od-fill" id="od-fill"></span>
-        <span class="od-label">⚡ オーバードライブ<small id="od-sub">O</small></span>
-      </button>
-    </div>
-
-    <!-- 右：ショップ -->
-    <div id="shop" class="panel">
-      <div class="shop-head">
-        <span>設備と人手</span>
-        <button id="b-shop-toggle" title="たたむ">–</button>
-      </div>
-      <div id="shop-list"></div>
-      <div class="shop-buy">
-        <button id="b-buy10">🧱 ドミノ10個を買う <b id="buy10-cost"></b></button>
-      </div>
+      <button id="b-tidy" class="big-btn tidy" title="倒れたドミノを起こす（長押し）">🧹 片付け<small>長押し / R</small></button>
+      <button id="b-run" class="big-btn start" title="本番の連鎖スタート (Enter)">▶ 倒す！<small>Enter</small></button>
+      <button id="b-rewind" class="big-btn rewind" title="ぜんまい巻き戻し">⏪ 巻き戻し<small id="rewind-sub">×0</small></button>
     </div>
 
     <div id="floaters"></div>
     <div id="toast"></div>
 
-    <!-- 操作説明 -->
+    <!-- 結果 -->
+    <div id="result" class="modal hidden"><div class="modal-card" id="result-card"></div></div>
+    <!-- ガチャ -->
+    <div id="gacha" class="modal hidden">
+      <div class="gacha-wrap">
+        <div id="gacha-title" class="gacha-title"></div>
+        <div id="gacha-capsule" class="capsule"></div>
+        <div id="gacha-cards" class="gacha-cards"></div>
+        <div id="gacha-sub" class="gacha-sub"></div>
+      </div>
+    </div>
+    <!-- 汎用ダイアログ -->
+    <div id="dialog" class="modal hidden"><div class="modal-card" id="dialog-card"></div></div>
+
+    <!-- 遊び方 -->
     <div id="help" class="modal hidden">
       <div class="modal-card">
-        <h2>あそびかた</h2>
+        <h2>世界一長いドミノ倒し — 遊び方</h2>
         <ol>
-          <li><b>ドミノを並べる</b>：画面を<b>クリック</b>すると、コースの最前線（▼マーク）にドミノが1個置かれます。<b>Space長押し</b>や<b>マウス長押し</b>で連続設置。</li>
-          <li><b>倒す</b>：<b>▶ 倒す！</b>（Enter）で連鎖スタート。倒れた数×コンボ倍率でコインがもらえます。</li>
-          <li><b>拾う</b>：倒れたドミノの近くをクリックすると手で回収して在庫に戻せます。<b>回収小人</b>を雇えば自動です。</li>
-          <li><b>雇う・強化する</b>：右の「設備と人手」で小人や機械を買うと、建設がどんどん自動化されます。</li>
-          <li><b>連続運転</b>：建設小人3・運搬小人2・回収小人1で解放。連鎖がだんだん加速しながら進み、その前で小人たちが建設を続けます。<b>波が最前線に追いついたら終了</b>。</li>
-          <li><b>オーバードライブ</b>：ドミノが倒れると「ぜんまい」が溜まります。満タンで発動すると10秒間、建設・運搬・回収が3倍速！ピンチのときに。</li>
+          <li><b>コースを描く</b>：右の「✏ 描く」で、緑の輪（スタート）からドラッグしてコースを描きます。ピンクの輪（ゴール装置）の近くで離すと接続。黄色の輪（コースの端）から続きを描けます。</li>
+          <li><b>並べる</b>：「🖐 置く」でクリック（長押しで連続）すると、近くの計画マスにドミノが立ちます。小人を手に入れると自動で建設します。</li>
+          <li><b>倒す</b>：準備ができたら「▶ 倒す！」。スタート台のパンチで最初のドミノが押され、<b>本物の物理演算</b>で連鎖します。間隔が悪い・急カーブ・すき間があると途中で止まります。</li>
+          <li><b>ゴール</b>：目標数以上を一度の連鎖で倒し、最後のドミノがゴール装置を動かせばクリア。</li>
+          <li><b>経験値とガチャ</b>：倒れた枚数が経験値。長い連鎖ほど多くもらえ、自己ベスト超えはボーナス。レベルアップごとに<b>3択ガチャ</b>でパーツを選びます（連鎖の後にまとめて開封）。</li>
+          <li><b>失敗しても大丈夫</b>：止まった場所に赤いマークが出ます。「🧹 片付け」や小人が起こしてくれるので、直して再挑戦。「🧪 区間テスト」で一部だけ試し倒し→自動で元に戻せます。</li>
         </ol>
-        <h3>小人のしくみ</h3>
-        <ul>
-          <li>🟡 <b>建設小人</b>：前線資材置き場（なければ倉庫のおもちゃ箱）からドミノを受け取り、最前線に並べる。倒れたドミノの立て直しもする。</li>
-          <li>🔵 <b>運搬小人</b>：おもちゃ箱から前線資材置き場へドミノを運ぶ。足りないと建設が止まる。</li>
-          <li>🟢 <b>回収小人</b>：倒れたドミノを拾って倉庫に戻す。</li>
-          <li>小人はときどき転んだり、ドミノを落としたり、<b>うっかりドミノを倒して予定外の連鎖</b>を起こします。数秒で復帰します。</li>
-        </ul>
-        <h3>カメラ</h3>
-        <p>左ドラッグ：回転 ／ 右ドラッグ：移動 ／ ホイール：ズーム ／ WASD・矢印：移動 ／ F：追尾 ／ V：全体</p>
-        <p class="sub">P：一時停止 ／ 1・2・4：ゲーム速度 ／ M：音 ／ H：この画面</p>
+        <h3>ストッパーズ</h3>
+        <p>青いヘルメットの防災隊。建設中のコースに安全ストッパーを差し込み、うっかり事故の連鎖を食い止めます。本番開始で自動解除（🔒ロックしたものは残る）。ステージ2ではルンバと戦います。</p>
+        <h3>操作</h3>
+        <p>左ドラッグ：回転（描くモードでは線を描く）／右ドラッグ：移動／ホイール：ズーム／WASD：移動／C：カメラ切替<br />1〜5：ツール／Q・E：パーツ回転／Enter：倒す／R：片付け／P：一時停止／H：この画面</p>
         <button id="b-help-close" class="big-btn start">あそぶ！</button>
       </div>
     </div>
