@@ -24,7 +24,7 @@ export class Renderer {
     r.shadowMap.enabled = true;
     r.shadowMap.type = THREE.PCFSoftShadowMap;
     r.toneMapping = THREE.ACESFilmicToneMapping;
-    r.toneMappingExposure = 1.0;
+    r.toneMappingExposure = 0.88;
     r.outputColorSpace = THREE.SRGBColorSpace;
     const pm = new THREE.PMREMGenerator(r);
     scene.environment = pm.fromScene(new RoomEnvironment(), 0.04).texture;

@@ -135,7 +135,8 @@ export class Machine {
         this.armT = 0;
       }
       this.notice -= dt;
-      if (this.hopper <= 0 && this.notice <= 0) { this.notice = 5; g.fx.floatAt(this.pos.clone().setY(2.6), '補給待ち…', 'warn', 1.5); }
+      this.empty = this.hopper <= 0 ? (this.empty || 0) + dt : 0;
+      if (this.empty > 3 && this.notice <= 0) { this.notice = 10; g.fx.floatAt(this.pos.clone().setY(2.6), '補給待ち…', 'warn', 1.5); }
     }
     this.armT = Math.min(1, this.armT + dt * 4);
     this.arm.rotation.z = -Math.sin(this.armT * Math.PI) * 0.5;

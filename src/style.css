@@ -86,7 +86,7 @@ button, select { font-family: inherit; color: var(--ink); cursor: pointer; }
 
 #banner { position: absolute; top: 112px; left: 50%; transform: translateX(-50%); font-weight: 800; font-size: 16px; color: #fff; text-shadow: 0 2px 4px rgba(0,0,0,.5); pointer-events: none; text-align: center; white-space: nowrap; }
 
-#runhud { position: absolute; top: 116px; left: 50%; transform: translateX(-50%); text-align: center; pointer-events: none; }
+#runhud { position: absolute; top: 150px; left: 50%; transform: translateX(-50%); text-align: center; pointer-events: none; }
 .rh-count { font-size: 54px; font-weight: 800; color: #fff; text-shadow: 0 3px 0 #ff7a3d, 0 6px 12px rgba(0,0,0,.4); line-height: 1; }
 .rh-count small { font-size: 22px; }
 #rh-piggy { margin-top: 4px; background: #ff9ec4; color: #fff; border-radius: 999px; padding: 2px 12px; font-weight: 800; display: inline-block; }

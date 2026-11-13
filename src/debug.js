@@ -61,6 +61,20 @@ export function installDebug(ctx) {
     runToEnd: (maxSec = 400) => { let t = 0; while (game.run && t < maxSec) { game.update(1 / 30); t += 1 / 30; } return game.lastResult; },
     stock: (n) => { game.stock += n; game.stats.produced += n; },
     save: () => ctx.save(true),
+    /** 性能計測：frames 回「更新＋描画」して1フレームの平均時間を測る */
+    bench: (frames = 60, q = null) => {
+      if (q) ctx.view.setQuality(q);
+      const t0 = performance.now(); let up = 0, rd = 0, maxF = 0;
+      for (let i = 0; i < frames; i++) {
+        const a = performance.now(); game.update(1 / 60); const b = performance.now(); ctx.view.render(); ctx.view.renderer.getContext().finish(); const c = performance.now();
+        up += b - a; rd += c - b; maxF = Math.max(maxF, c - a);
+      }
+      const total = performance.now() - t0;
+      return { frameMs: +(total / frames).toFixed(2), estFps: +(1000 / (total / frames)).toFixed(1), updateMs: +(up / frames).toFixed(2), renderMs: +(rd / frames).toFixed(2), worstMs: +maxF.toFixed(1), ...api.stats() };
+    },
+    look: (x, z, dist = 18, polar = 0.9) => { ctx.rig.lookAt(ctx.rig.controls.target.clone().set(x, 0, z), dist, polar); ctx.rig.mode = 'free'; },
+    cam: (m) => ctx.rig.setMode(m),
+    clearFloaters: () => { game.fx.items.forEach((it) => it.el.remove()); game.fx.items.length = 0; },
     /**
      * 人間のように遊ぶボット（バランス検証用）。描画なしで sec 秒ぶん進める。
      * 序盤は手で置き、短い連鎖で経験値を稼ぎ、ガチャは優先順で選び、コースが完成したら本番。

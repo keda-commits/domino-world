@@ -178,7 +178,7 @@ class StageRuntime {
 }
 
 function lighting(st, sunPos, sunColor = '#ffe2b5', intensity = 2.6) {
-  const hemi = new THREE.HemisphereLight('#fff3df', '#8a6b4a', 0.7);
+  const hemi = new THREE.HemisphereLight('#fff3df', '#8a6b4a', 0.5);
   const sun = new THREE.DirectionalLight(sunColor, intensity);
   sun.position.copy(sunPos);
   sun.castShadow = true;
