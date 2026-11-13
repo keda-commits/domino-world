@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import * as P from './props.js';
 import { R } from '../core/physics.js';
+import { pbr, fabricNormal, model } from './assets.js';
 
 /**
  * ステージ定義。家具は「見た目」と「障害物（建設不可・ルンバが避ける）」と「物理コライダー」をまとめて登録する。
@@ -11,23 +12,28 @@ export const STAGES = {
     id: 1,
     name: 'STAGE 1　子ども部屋',
     title: 'はじめての大連鎖',
-    goalText: '300個以上を一度の連鎖で倒し、ゴールベルを鳴らす',
-    target: 300,
+    goalText: 'スタートからの連鎖でゴールベルを鳴らす',
+    target: 300, // 設計規模（クリア条件ではない）
     bounds: { minX: -32, maxX: 32, minZ: -24, maxZ: 24 },
     floor: { w: 120, d: 100, tone: 'light' },
     start: { x: -25, z: -8, yaw: Math.PI / 2 },
     goal: { x: 26.5, z: 18, yaw: Math.PI / 2, type: 'bell' },
     depots: [{ x: -26, z: -19.5 }, { x: 24, z: -4 }],
-    markers: [
-      { type: 'present', x: -6, z: -15 }, { type: 'present', x: 13, z: 5 }, { type: 'present', x: -15, z: 4 },
-      { type: 'clover', x: 4, z: 15 },
-      { type: 'orbs', x: 0, z: -6 }, { type: 'orbs', x: 18, z: 12 },
-    ],
-    chests: [{ x: -2, z: -21, kind: 'mid' }],
-    gachaMachine: { x: -17, z: -14, category: 'build' },
+    markers: [],
+    chests: [],
+    gachaMachine: null,
     towerSpot: { x: 30, z: -12 }, hqSpot: { x: 10, z: 21 },
+    gachaSpot: { x: -19, z: -21.3, yaw: 0 },
     guardPosts: [[-20, 0], [10, -2], [20, 14]],
     roomba: null,
+    // 中間ゴール（at = コースの何番目のドミノか）。到達報酬は一度きり
+    checkpoints: [
+      { at: 50, type: 'bell', name: 'ちいさなベル' },
+      { at: 130, type: 'gacha', name: 'ガチャマシンのレバー', category: 'build' },
+      { at: 222, type: 'flag', name: '旗あげスイッチ' },
+    ],
+    // コースに組み込まれた特別なドミノ（倒すと一度だけ効果）
+    specials: [{ at: 92, type: 'present' }, { at: 176, type: 'clover' }, { at: 262, type: 'present' }],
     suggested: [
       { name: 'おすすめ：部屋をひと巡りするルート', pts: [[-25, -8], [-21, -8], [-18, -9.5], [-14.2, -12.2], [-10, -14], [-6, -15.5], [-2, -17.8], [3, -18], [7, -17], [9, -14], [8, -11], [4, -9.5], [-1, -8.5], [-5, -7], [-8, -4], [-12, -1], [-15, 3], [-13, 7], [-8, 8], [-2, 8], [4, 7], [8, 6], [13, 5], [18, 3], [21, 5.5], [21.5, 9], [18.5, 11.5], [14, 12], [10, 12.5], [4, 12], [-2, 12.5], [-8, 13], [-11, 15.5], [-9, 18], [-3, 16], [4, 16.5], [10, 18], [16, 18], [21, 18], [24.5, 18]] },
     ],
@@ -37,21 +43,18 @@ export const STAGES = {
     id: 2,
     name: 'STAGE 2　リビング',
     title: 'ルンバが来たぞ！',
-    goalText: '1,000個以上を一度の連鎖で倒し、巨大からくり装置を起動する',
-    target: 1000,
+    goalText: 'ルンバから守り抜き、連鎖で巨大からくり装置を起動する',
+    target: 1300, // 設計規模（クリア条件ではない）
     bounds: { minX: -74, maxX: 74, minZ: -47, maxZ: 47 },
     floor: { w: 220, d: 160, tone: 'dark' },
     start: { x: -71.5, z: -42, yaw: 0 },
     goal: { x: 48, z: 41, yaw: Math.PI / 2, type: 'machine' },
     depots: [{ x: -66, z: 21.5 }, { x: -38, z: -42 }, { x: 27, z: -43.5 }, { x: 60, z: -20 }],
-    markers: [
-      { type: 'present', x: -64, z: 2 }, { type: 'present', x: -20, z: 34 }, { type: 'present', x: 28, z: -24 }, { type: 'present', x: 18, z: 8 },
-      { type: 'clover', x: -30, z: -20 }, { type: 'clover', x: 20, z: 37.6 },
-      { type: 'orbs', x: -60, z: -20 }, { type: 'orbs', x: 0, z: 40 }, { type: 'orbs', x: 10, z: -2 },
-    ],
-    chests: [{ x: -53, z: 5, kind: 'mid' }, { x: 10, z: 40.2, kind: 'mid' }],
-    gachaMachine: { x: -8, z: 40.5, category: 'defense' },
+    markers: [],
+    chests: [],
+    gachaMachine: null,
     towerSpot: { x: -52, z: 10 }, hqSpot: { x: -44, z: 43.5 },
+    gachaSpot: { x: -28, z: -41, yaw: 0 },
     guardPosts: [[-48, 14], [0, 25.5], [52, 10], [20, -36], [-30, -37]],
     roomba: {
       dock: { x: 62, z: -42, yaw: 0 },
@@ -59,11 +62,18 @@ export const STAGES = {
       // 巡回パターン（交互に実行・事前に床へ予告表示）
       patterns: [
         { name: 'ソファ前の掃除', pts: [[50, -34], [-36, -30], [-36, -22], [40, -22], [52, -32]] },
-        { name: 'テーブルまわりのスポット掃除', pts: [[46, -28], [20, -16], [5, -18], [-10, -12], [-10, -2], [5, 4], [20, -2], [20, -16], [48, -30]] },
+        { name: 'テーブルまわりのスポット掃除', pts: [[46, -28], [20, -14], [5, -12], [-10, -12], [-10, -2], [5, 4], [20, -2], [20, -16], [48, -30]] },
         { name: '窓ぎわ手前の掃除（前列に接近！）', pts: [[50, -28], [46, 0], [30, 14], [12, 22], [8, 25.5], [-12, 25.5], [-20, 20], [-36, 16], [-36, 6], [30, 6], [48, -28]] },
       ],
       idleTime: 30,
     },
+    checkpoints: [
+      { at: 150, type: 'flag', name: '廊下の旗' },
+      { at: 410, type: 'alarm', name: '警報ベル（ルンバを帰らせる）' },
+      { at: 760, type: 'gacha', name: '防衛ガチャマシン', category: 'defense' },
+      { at: 1060, type: 'alarm', name: '第2警報ベル' },
+    ],
+    specials: [{ at: 300, type: 'present' }, { at: 600, type: 'clover' }, { at: 930, type: 'present' }],
     suggested: [],
     build: buildStage2,
   },
@@ -109,6 +119,8 @@ STAGES[2].suggested = [
 ];
 
 // ------------------------------------------------------------
+const BEVEL = 0.8; // ラグの縁の坂の半幅
+
 class StageRuntime {
   constructor(def, scene, physics) {
     this.def = def;
@@ -141,7 +153,9 @@ class StageRuntime {
     if (shape === 'rect') this.colliders.push(this.physics.staticBox(x, h / 2, z, hw, h / 2, hd, 0, 0.7));
     else {
       const pts = [];
-      for (let i = 0; i < 40; i++) { const a = (i / 40) * Math.PI * 2; pts.push(x + Math.cos(a) * hw, 0, z + Math.sin(a) * hd, x + Math.cos(a) * hw, h, z + Math.sin(a) * hd); }
+      // 縁はゆるい坂（約3°）にする。段差の角にまたがったドミノが傾いて連鎖が止まらないように
+      const B = BEVEL;
+      for (let i = 0; i < 48; i++) { const a = (i / 48) * Math.PI * 2; pts.push(x + Math.cos(a) * (hw + B), 0, z + Math.sin(a) * (hd + B), x + Math.cos(a) * (hw - B), h, z + Math.sin(a) * (hd - B)); }
       const d = R.ColliderDesc.convexHull(new Float32Array(pts));
       if (d) this.colliders.push(this.physics.world.createCollider(d.setFriction(0.7)));
     }
@@ -165,8 +179,11 @@ class StageRuntime {
     let h = 0;
     for (const s of this.surfaces) {
       const dx = (x - s.x) / s.hw, dz = (z - s.z) / s.hd;
-      const inside = s.shape === 'rect' ? Math.abs(dx) <= 1 && Math.abs(dz) <= 1 : dx * dx + dz * dz <= 1;
-      if (inside) h = Math.max(h, s.h);
+      if (s.shape === 'rect') { if (Math.abs(dx) <= 1 && Math.abs(dz) <= 1) h = Math.max(h, s.h); continue; }
+      // 楕円：縁の坂に合わせた高さ
+      const rn = Math.hypot(dx, dz), dist = Math.hypot(x - s.x, z - s.z);
+      const edge = rn > 1e-6 ? dist - dist / rn : -1e9; // 縁からの距離（内側が負）
+      h = Math.max(h, s.h * Math.min(1, Math.max(0, (BEVEL - edge) / (2 * BEVEL))));
     }
     return h;
   }
@@ -177,15 +194,16 @@ class StageRuntime {
   }
 }
 
-function lighting(st, sunPos, sunColor = '#ffe2b5', intensity = 2.6) {
-  const hemi = new THREE.HemisphereLight('#fff3df', '#8a6b4a', 0.5);
+function lighting(st, sunPos, sunColor = '#ffdcb0', intensity = 3.4) {
+  // 窓から入る方向性のある光が主役。周りの光（半球光）は弱くして陰影を出す
+  const hemi = new THREE.HemisphereLight('#ffeedd', '#5a3f2a', 0.22);
   const sun = new THREE.DirectionalLight(sunColor, intensity);
   sun.position.copy(sunPos);
   sun.castShadow = true;
   sun.shadow.bias = -0.0003;
   sun.shadow.normalBias = 0.02;
-  sun.shadow.radius = 4;
-  const fill = new THREE.DirectionalLight('#b9d4ff', 0.35);
+  sun.shadow.radius = 3;
+  const fill = new THREE.DirectionalLight('#9fbfff', 0.18);
   fill.position.set(40, 30, 60);
   st.scene.add(hemi, sun, sun.target, fill);
   st.lights.push(hemi, sun, sun.target, fill);
@@ -195,17 +213,19 @@ function lighting(st, sunPos, sunColor = '#ffe2b5', intensity = 2.6) {
 
 function buildStage1(st) {
   const b = st.bounds;
-  st.scene.background = new THREE.Color('#f3d6ae');
-  st.scene.fog = new THREE.Fog('#f0d2a8', 120, 260);
-  lighting(st, new THREE.Vector3(-30, 70, -60));
-  const lamp = new THREE.PointLight('#ffb36b', 400, 90, 1.6);
+  st.scene.background = new THREE.Color('#1d1612');
+  st.scene.fog = null;
+  lighting(st, new THREE.Vector3(-30, 62, -60));
+  const lamp = new THREE.PointLight('#ffb36b', 260, 70, 1.8);
   lamp.position.set(16, 22, -14);
   st.scene.add(lamp); st.lights.push(lamp);
 
-  st.add(P.floorPlanks(120, 100, 'light'));
-  const back = st.add(P.wallpaper(120, 50), 0, b.minZ - 1); back.position.y = 25;
-  const left = st.add(P.wallpaper(100, 50), b.minX - 1, 0, Math.PI / 2); left.position.y = 25;
-  const right = st.add(P.wallpaper(100, 50, '#e9f2fb', '#dbe8f5', '#9cc6ee'), b.maxX + 1, 0, -Math.PI / 2); right.position.y = 25;
+  // 床：本物の木目（1単位 ≒ 5cm、テクスチャ1枚 ≒ 2m）
+  st.add(floor(120, 100, pbr('wood_floor', [3, 2.5], { color: '#e6d2bc', normal: 0.8, roughness: 1.3, env: 0.6 })));
+  const wallMat = (w, h, c) => pbr('beige_wall_001', [w / 30, h / 30], { maps: ['diff', 'nor_gl'], color: c, roughness: 0.92, normal: 0.6 });
+  const back = st.add(new THREE.Mesh(new THREE.PlaneGeometry(120, 50), wallMat(120, 50, '#f4e2cf')), 0, b.minZ - 1); back.position.y = 25; back.receiveShadow = true;
+  const left = st.add(new THREE.Mesh(new THREE.PlaneGeometry(100, 50), wallMat(100, 50, '#f4e2cf')), b.minX - 1, 0, Math.PI / 2); left.position.y = 25; left.receiveShadow = true;
+  const right = st.add(new THREE.Mesh(new THREE.PlaneGeometry(100, 50), wallMat(100, 50, '#dfe9f2')), b.maxX + 1, 0, -Math.PI / 2); right.position.y = 25; right.receiveShadow = true;
   st.wall(b.minX - 1, -60, b.minX - 1, 60); st.wall(-80, b.minZ - 1, 80, b.minZ - 1); st.wall(b.maxX + 1, -60, b.maxX + 1, 60);
   const base = P.MAT.matte('#ffffff');
   const bb1 = new THREE.Mesh(P.rbox(120, 2, 0.8, 0.2), base); st.add(bb1, 0, b.minZ - 0.6, 0, 1);
@@ -215,13 +235,15 @@ function buildStage1(st) {
   const door = new THREE.Mesh(P.rbox(0.6, 22, 12, 0.3), P.MAT.wood('#e0b07a')); st.add(door, b.maxX + 0.7, 14, 0, 11);
   const knob = new THREE.Mesh(new THREE.SphereGeometry(0.5, 12, 8), P.MAT.metal('#d8b46a')); st.add(knob, b.maxX + 0.2, 10, 0, 10);
 
-  st.add(P.rug(14, 10, ['#f7b2a6', '#fde3a7', '#b5e0d3', '#c9c3f0', '#fde3a7']), 1, 2);
-  st.surface(1, 2, 14, 10, 0.08, 'ellipse');
+  const rugM = st.add(P.rug(14, 10, ['#d9534f', '#f0c05a', '#3f8f8a', '#7a5ea8', '#f0c05a']), 1, 2);
+  rugM.material.normalMap = fabricNormal([6, 6]); rugM.material.normalScale.set(1.5, 1.5); rugM.material.roughness = 1;
+  // ラグは見た目だけ（薄い）。物理の段差を作ると縁に沿ったドミノが傾いて連鎖が止まるため
+  rugM.scale.y = 0.4; rugM.position.y = 0.016;
 
   st.add(P.bed(16, 12), -23, 17); st.rect(-23, 17, 8.2, 6.2, 0, 6);
-  st.add(P.desk(18, 9, 11), 18, -19);
+  st.group.add(model('SchoolDesk_01', { width: 18, x: 18, z: -19.5 }));
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) st.rect(18 + sx * 7.6, -19 + sz * 3.1, 0.9, 0.9, 0, 10);
-  st.add(P.chair(1), 15, -9.5, Math.PI);
+  st.group.add(model('SchoolChair_01', { width: 8, x: 15, z: -10, yaw: Math.PI }));
   for (const sx of [-1, 1]) for (const sz of [-1, 1]) st.rect(15 + sx * 3, -9.5 + sz * 3, 0.6, 0.6, 0, 8);
   st.add(P.blocks(3, 0), 6, -3); st.circle(6, -3, 2.2, 9);
   st.add(P.blocks(2, 3), -27, -12); st.circle(-27, -12, 2.2, 6);
@@ -233,17 +255,18 @@ function buildStage1(st) {
 
 function buildStage2(st) {
   const b = st.bounds;
-  st.scene.background = new THREE.Color('#e9dcc8');
-  st.scene.fog = new THREE.Fog('#e6d6be', 160, 360);
-  lighting(st, new THREE.Vector3(40, 90, -80), '#fff0d6', 2.4);
-  const lamp = new THREE.PointLight('#ffcf8f', 900, 140, 1.5);
+  st.scene.background = new THREE.Color('#1d1612');
+  st.scene.fog = null;
+  lighting(st, new THREE.Vector3(40, 80, -80), '#ffe6c4', 3.4);
+  const lamp = new THREE.PointLight('#ffcf8f', 520, 120, 1.7);
   lamp.position.set(-20, 30, 10);
   st.scene.add(lamp); st.lights.push(lamp);
 
-  st.add(P.floorPlanks(220, 160, 'dark'));
-  const back = st.add(P.wallpaper(220, 60, '#eef1e6', '#e1e7d6', '#b8cfa6'), 0, b.minZ - 1); back.position.y = 30;
-  const left = st.add(P.wallpaper(160, 60, '#f6efe4', '#ece2d2', '#d9c2a0'), b.minX - 1, 0, Math.PI / 2); left.position.y = 30;
-  const right = st.add(P.wallpaper(160, 60, '#eef1e6', '#e1e7d6', '#b8cfa6'), b.maxX + 1, 0, -Math.PI / 2); right.position.y = 30;
+  st.add(floor(220, 160, pbr('herringbone_parquet', [5.5, 4], { color: '#d9c0a2', normal: 0.9, roughness: 1.6, env: 0.45 })));
+  const wallMat = (w, h, c) => pbr('plastered_wall_02', [w / 30, h / 30], { maps: ['diff', 'nor_gl'], color: c, roughness: 0.92, normal: 0.6 });
+  const back = st.add(new THREE.Mesh(new THREE.PlaneGeometry(220, 60), wallMat(220, 60, '#efe6da')), 0, b.minZ - 1); back.position.y = 30; back.receiveShadow = true;
+  const left = st.add(new THREE.Mesh(new THREE.PlaneGeometry(160, 60), wallMat(160, 60, '#efe6da')), b.minX - 1, 0, Math.PI / 2); left.position.y = 30; left.receiveShadow = true;
+  const right = st.add(new THREE.Mesh(new THREE.PlaneGeometry(160, 60), wallMat(160, 60, '#efe6da')), b.maxX + 1, 0, -Math.PI / 2); right.position.y = 30; right.receiveShadow = true;
   st.wall(b.minX - 1, -80, b.minX - 1, 80); st.wall(-100, b.minZ - 1, 100, b.minZ - 1); st.wall(b.maxX + 1, -80, b.maxX + 1, 80);
   // 廊下の仕切り壁
   const pw = new THREE.Mesh(P.rbox(1.5, 30, 40, 0.3), P.MAT.matte('#f6efe4'));
@@ -252,22 +275,28 @@ function buildStage2(st) {
   const sign = new THREE.Mesh(P.rbox(10, 3, 0.3, 0.2), P.MAT.wood('#e0b07a')); st.add(sign, -54, -8, 0, 22);
   for (let i = 0; i < 3; i++) { const w = st.add(P.windowFrame(22, 20), -40 + i * 45, b.minZ - 0.8); w.position.y = 28; }
 
-  st.add(P.carpet(56, 40, 0.14, '#7d93bf'), 5, -8);
-  st.surface(5, -8, 28, 20, 0.14, 'rect');
+  const cp = st.add(new THREE.Mesh(P.rbox(56, 0.04, 40, 0.02, 2), pbr('poly_wool_herringbone', [6, 4.5], { maps: ['diff', 'nor_gl'], color: '#9fb0d6', normal: 1.2 })), 5, -8); cp.position.y = 0.02; cp.receiveShadow = true;
 
-  st.add(P.sofa(34, 12), 5, -40); st.rect(5, -40, 17, 6, 0, 10);
-  st.add(P.coffeeTable(18, 10, 7), 5, -10);
-  for (const sx of [-1, 1]) for (const sz of [-1, 1]) st.rect(5 + sx * 7.8, -10 + sz * 3.8, 0.7, 0.7, 0, 7);
+  st.group.add(model('sofa_02', { width: 36, x: 5, z: -40.5 })); st.rect(5, -40, 17, 6, 0, 10);
+  st.group.add(model('modern_coffee_table_01', { width: 18, fit: 'z', x: 5, z: -10 }));
+  for (const sz of [-1, 1]) st.rect(5, -10 + sz * 8.4, 4.5, 0.6, 0, 6); // V字の脚（両端）。間はルンバが通れる
   st.add(P.tvStand(28, 6), 70, 0, -Math.PI / 2); st.rect(70, 0, 3, 14, 0, 30);
-  st.add(P.bookshelf(16, 18, 4), 40, -44.5); st.rect(40, -44.5, 8.2, 2.2, 0, 18);
+  st.group.add(model('wooden_bookshelf_worn', { width: 16, x: 40, z: -44.3 })); st.rect(40, -44.5, 8.2, 2.2, 0, 18);
   st.add(P.plant(1), -48, -42); st.circle(-48, -42, 3.2, 10);
-  st.add(P.plant(1.1), 68, -36); st.circle(68, -36, 3.4, 10);
+  st.add(P.plant(1.1), 69.5, -27); st.circle(69.5, -27, 3.4, 10); // 充電台への帰り道をふさがない位置
   st.add(P.plant(0.9), -68, 44); st.circle(-68, 44, 3, 10);
-  const ac = st.add(P.sofa(14, 12), 48, 26, -2.3); void ac; st.rect(48, 26, 7.5, 6.5, -2.3, 10);
+  st.group.add(model('ArmChair_01', { width: 15, x: 48, z: 26, yaw: -2.3 })); st.rect(48, 26, 7.5, 6.5, -2.3, 10);
   st.add(P.toyCar('#1c7ed6', 0.9), -30, 44, 1.2); st.rect(-30, 44, 4.2, 2.4, 1.2, 4);
   st.add(P.blocks(4, 2), 30, 12); st.circle(30, 12, 2.4, 12);
   st.add(P.teddy(0.7), -64, 30, 1.0); st.circle(-64, 30, 3.6, 10);
   st.add(P.dock(), 62, -44.5); st.rect(62, -44.5, 3.2, 1.2, 0, 3, { roomba: false });
+}
+
+function floor(w, d, mat) {
+  const f = new THREE.Mesh(new THREE.PlaneGeometry(w, d), mat);
+  f.rotation.x = -Math.PI / 2;
+  f.receiveShadow = true;
+  return f;
 }
 
 export function createStage(id, scene, physics) {
@@ -276,3 +305,9 @@ export function createStage(id, scene, physics) {
   def.build(st);
   return st;
 }
+
+
+// ステージのコースは CPU（ゲーム側）が設計した固定コース。
+// （自由設計用の suggested は将来のエンドレスモード用に残している）
+STAGES[1].course = STAGES[1].suggested[0].pts;
+STAGES[2].course = STAGES[2].suggested[1].pts;

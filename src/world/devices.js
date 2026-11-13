@@ -16,13 +16,15 @@ export function local(o, lx, lz) {
   return { x: o.x + lx * c + lz * s, z: o.z - lx * s + lz * c };
 }
 
-export function hingedPaddle(physics, pose, w, h, t, density = 0.3) {
+export function hingedPaddle(physics, pose, w, h, t, density = 0.3, spring = 0) {
   // 底辺を軸に前へ倒れる板（回転ジョイント）
   const base = physics.world.createRigidBody(R.RigidBodyDesc.fixed().setTranslation(pose.x, pose.y || 0, pose.z).setRotation(physics.quatYaw(pose.yaw)));
   const body = physics.world.createRigidBody(R.RigidBodyDesc.dynamic().setTranslation(pose.x, (pose.y || 0) + h / 2 + 0.02, pose.z).setRotation(physics.quatYaw(pose.yaw)).setAngularDamping(0.4).setCanSleep(true));
   physics.world.createCollider(R.ColliderDesc.cuboid(w / 2, h / 2, t / 2).setDensity(density).setFriction(0.5), body);
   const jd = R.JointData.revolute({ x: 0, y: 0.02, z: 0 }, { x: 0, y: -h / 2, z: 0 }, { x: 1, y: 0, z: 0 });
-  physics.world.createImpulseJoint(jd, base, body, true);
+  const joint = physics.world.createImpulseJoint(jd, base, body, true);
+  // 弱いばね：小さな揺れでは倒れず、ドミノが当たったときだけ倒れる（重力の復元力より少し強い）
+  if (spring > 0) joint.configureMotorPosition(0, spring * density * w * h * t * physics.world.gravity.y * -1 * h / 2, spring * 0.02);
   body.sleep();
   return {
     body, base, pose, h,

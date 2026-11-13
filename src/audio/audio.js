@@ -130,7 +130,10 @@ export class Audio {
   magnet(n) { for (let i = 0; i < Math.min(n, 12); i++) this.tone(900 + i * 80, 0.08, 'sine', 0.06, 0.4 + i * 0.05); }
   rewind() { this.tone(1600, 0.6, 'sawtooth', 0.05, 0, 200); for (let i = 0; i < 10; i++) this.tone(2000 - i * 120, 0.03, 'square', 0.04, i * 0.05); }
   toot() { this.tone(587, 0.18, 'square', 0.06); this.tone(740, 0.25, 'square', 0.06, 0.2); }
-  roombaStart() { this.tone(220, 0.4, 'sawtooth', 0.08, 0, 440); this.tone(330, 0.5, 'square', 0.04, 0.1, 660); }
+  roombaStart() { // 低いうなり＋2音のサイレン
+    this.tone(70, 0.9, 'sawtooth', 0.09, 0, 55); this.tone(110, 0.9, 'square', 0.03, 0, 90);
+    for (let i = 0; i < 3; i++) { this.tone(392, 0.16, 'square', 0.05, 0.25 + i * 0.36, 392); this.tone(311, 0.16, 'square', 0.05, 0.43 + i * 0.36, 311); }
+  }
   gachaSpin() { for (let i = 0; i < 8; i++) this.tone(600 + i * 60, 0.05, 'square', 0.04, i * 0.07); }
   gachaReveal(rarity) {
     const tbl = { common: [659, 784], rare: [659, 784, 988], epic: [659, 831, 988, 1319], legendary: [523, 659, 784, 1046, 1319, 1568, 2093] };
@@ -155,6 +158,31 @@ export class Audio {
       this.hum = { g };
     }
     this.hum.g.gain.setTargetAtTime(vol, this.ctx.currentTime, 0.2);
+  }
+
+  checkpoint() { [784, 988, 1175, 1568, 1976].forEach((f, i) => this.tone(f, 0.22, 'triangle', 0.12, i * 0.06)); this.bell(); }
+  capsule() { this.noiseHit(1800, 2, 0.35, 0.06); this.tone(420 + Math.random() * 80, 0.08, 'sine', 0.1, 0, 300); }
+  gachaPick(rarity, evo) {
+    // 決定音：ポンッ＋きらきら（レア度で豪華に）
+    this.tone(330, 0.12, 'square', 0.08, 0, 660); this.noiseHit(3500, 1, 0.4, 0.15);
+    const n = { common: 3, rare: 5, epic: 7, legendary: 9 }[rarity] || 3;
+    for (let i = 0; i < n; i++) this.tone(1046 * Math.pow(1.122, i), 0.25, 'triangle', 0.08, 0.12 + i * 0.05);
+    if (evo) this.evolve();
+  }
+  /** スタートの一押し：パンチ → カチッ → 最初の数枚 */
+  firstPush() { this.punch(); this.tone(90, 0.3, 'sine', 0.25, 0, 50); }
+  chainSwell(rate) {
+    // 連鎖が加速するにつれて、低いうなり（ざわめき）を重ねる
+    if (!this.ok) return;
+    if (!this.swell) {
+      const s = this.ctx.createBufferSource(); s.buffer = this.longNoise; s.loop = true;
+      const f = this.ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 900; f.Q.value = 0.7;
+      const g = this.ctx.createGain(); g.gain.value = 0;
+      s.connect(f).connect(g).connect(this.sfx); s.start();
+      this.swell = { g, f };
+    }
+    this.swell.g.gain.setTargetAtTime(Math.min(0.12, rate * 0.007), this.ctx.currentTime, 0.3);
+    this.swell.f.frequency.setTargetAtTime(700 + rate * 40, this.ctx.currentTime, 0.3);
   }
 
   // ---------------- BGM シーケンサ ----------------

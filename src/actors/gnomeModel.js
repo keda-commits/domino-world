@@ -28,7 +28,8 @@ export const ROLE_STYLE = {
 };
 
 const cache = {};
-export const gnomeMaterial = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55 });
+// ソフビ人形のような、つやのある塗装プラスチック
+export const gnomeMaterial = new THREE.MeshPhysicalMaterial({ vertexColors: true, roughness: 0.42, clearcoat: 0.7, clearcoatRoughness: 0.25 });
 
 export function gnomeGeometries(role) {
   if (cache[role]) return cache[role];
@@ -42,6 +43,8 @@ export function gnomeGeometries(role) {
     colored(at(new THREE.SphereGeometry(0.045, 8, 6), 0, -0.025, 0.19), '#ff9580'),
     colored(at(new THREE.SphereGeometry(0.035, 8, 6), -0.11, -0.05, 0.135), '#ffaaa0'),
     colored(at(new THREE.SphereGeometry(0.035, 8, 6), 0.11, -0.05, 0.135), '#ffaaa0'),
+    // にっこり口
+    colored(at(new THREE.TorusGeometry(0.045, 0.011, 5, 12, Math.PI).rotateZ(Math.PI), 0, -0.07, 0.172), '#7a2a1c'),
   ];
   if (st.kind === 'hardhat') {
     parts.push(colored(at(half(0.205), 0, 0.03, 0), st.hat));

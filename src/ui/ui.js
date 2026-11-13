@@ -4,185 +4,218 @@ import { STAGES } from '../world/stages.js';
 
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => Math.floor(n).toLocaleString('ja-JP');
-const ROLE_LABEL = { builder: '👷 建設', carrier: '📦 運搬', collector: '🧺 回収', stopperCrew: '🦺 設置係', restorer: '🚑 復旧係', guard: '👮 警備係' };
-const PIECE_ICON = { minicar: '🏎', marble: '🔵', bridge: '🌉', bell: '🔔', barricade: '🚧', sensor: '📡' };
+const ROLE_LABEL = { builder: '👷 建設担当', carrier: '📦 運搬担当', collector: '🧺 回収担当', stopperCrew: '🦺 ストッパー設置係', restorer: '🚑 復旧係', guard: '👮 警備係' };
+const PIECE_ICON = { bell: '🔔', barricade: '🚧', sensor: '📡' };
+const STAGE_PIECES = ['bell', 'barricade', 'sensor'];
 
-/** HUD・ツール・モーダル */
+/** 画面の HUD・メニュー（コンパクト版） */
 export class UI {
   constructor(game, h) {
     this.g = game; this.h = h;
-    this.toastT = 0;
+    this.flashT = 0;
     document.querySelectorAll('[data-tool]').forEach((b) => (b.onclick = () => h.setTool(b.dataset.tool)));
-    document.querySelectorAll('[data-tab]').forEach((b) => (b.onclick = () => this.tab(b.dataset.tab)));
     document.querySelectorAll('[data-speed]').forEach((b) => (b.onclick = () => h.setSpeed(+b.dataset.speed)));
+    document.querySelectorAll('[data-view]').forEach((b) => (b.onclick = () => h.setView(b.dataset.view)));
+    $('b-cam-reset').onclick = () => h.resetCam();
+    $('b-autocam').onclick = () => h.toggleAutoCam();
     $('b-run').onclick = () => h.run();
     $('b-rewind').onclick = () => h.rewind();
     const tidy = $('b-tidy');
     tidy.onpointerdown = (e) => { e.preventDefault(); h.tidyHold(true); };
     ['pointerup', 'pointerleave', 'pointercancel'].forEach((ev) => tidy.addEventListener(ev, () => h.tidyHold(false)));
     $('b-pause').onclick = () => h.togglePause();
-    $('cam-mode').onchange = (e) => h.setCam(e.target.value);
-    $('b-autocam').onclick = () => h.toggleAutoCam();
-    $('b-save').onclick = () => h.save(true);
-    $('b-stages').onclick = () => this.stageSelect();
-    $('b-settings').onclick = () => this.settings();
-    $('b-help').onclick = () => this.showHelp(true);
-    $('b-help-close').onclick = () => this.showHelp(false);
-    $('b-clear-course').onclick = () => this.confirm('コースを全部消しますか？', '建っているドミノは在庫に戻ります。', () => h.clearCourse());
+    $('b-menu').onclick = () => this.togglePanel();
+    $('pn-close').onclick = () => this.togglePanel(false);
+    document.querySelectorAll('[data-tab]').forEach((b) => (b.onclick = () => this.tab(b.dataset.tab)));
+    $('g3-fast').onclick = () => { const on = h.gachaFast(); $('g3-fast').classList.toggle('on', on); };
+    $('g3-skip').onclick = () => h.gachaSkip();
+    this.curTab = 'records';
   }
 
-  tab(t) {
-    document.querySelectorAll('[data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === t));
-    $('tab-design').classList.toggle('hidden', t !== 'design');
-    $('tab-build').classList.toggle('hidden', t !== 'build');
-    if (t === 'build') this.buildList();
-  }
+  // ---------------- ツール ----------------
   setTool(t) {
-    document.querySelectorAll('[data-tool]').forEach((b) => b.classList.toggle('on', b.dataset.tool === t));
-    document.querySelectorAll('.piece').forEach((b) => b.classList.toggle('on', 'piece:' + b.dataset.piece === t));
+    document.querySelectorAll('[data-tool]').forEach((b) => b.classList.toggle('on', b.dataset.tool === t || (t.startsWith('piece:') && b.dataset.tool === 'pieces')));
     const hints = {
-      play: 'クリック：近くの計画マスにドミノを置く／倒れたドミノを起こす。長押しで連続。',
-      draw: '緑の輪（スタート）や黄色の輪（コースの端）からドラッグして描く。ピンクの輪（ゴール・装置の入口）の近くで離すと接続。分岐パーツがあれば途中からも描けます。',
-      erase: 'クリックした位置から先のコースを消す。置いたパーツをクリックすると撤去。',
-      test: '区間テスト：コース上の始点→終点の順にクリック。その区間だけ試し倒しして、終わると自動で元に戻ります（経験値なし）。',
-      stopper: 'ストッパーをクリック：🔒ロック（本番でも外さない）を切り替え。区間を守りたい時に。',
+      play: 'クリック：設計図の先頭にドミノを置く／倒れたドミノを起こす（長押しで連続）。ドラッグでカメラ回転。',
+      test: '試し倒し：設計図の上で始点→終点をクリック。その区間だけ倒して、自動で元に戻します。',
+      stopper: 'ストッパーをクリックして🔒ロック（本番でも外さない）を切り替え。',
     };
-    $('tool-hint').textContent = t.startsWith('piece:') ? `クリックで配置（Q/Eで回転）。${PIECE_LABEL[t.slice(6)]}` + (t === 'piece:bell' ? '：コースのすぐ横に。連鎖で鳴る。' : t === 'piece:barricade' || t === 'piece:sensor' ? '：ルンバ対策。' : '：置いたら、入口へ線をつなぎ、出口から線を引く。') : hints[t] || '';
+    $('tool-hint').textContent = t.startsWith('piece:') ? `${PIECE_LABEL[t.slice(6)]}：クリックで置く（Q/Eで回転、右クリックで取りやめ）` : hints[t] || '';
+    const pop = $('piece-pop');
+    if (t === 'pieces') {
+      const types = STAGE_PIECES.filter((p) => this.g.level(p) > 0);
+      pop.innerHTML = types.length ? types.map((p) => `<button data-piece="${p}">${PIECE_ICON[p]} ${PIECE_LABEL[p]}（残り${this.g.placeableCount(p) - this.g.placeableUsed(p)}）</button>`).join('') : '<span style="font-size:12px;color:#d9c9b6">ガチャで警報ベル・バリケード・接近センサーを手に入れると置けます（ステージ2）</span>';
+      pop.querySelectorAll('[data-piece]').forEach((b) => (b.onclick = () => this.h.setTool('piece:' + b.dataset.piece)));
+      pop.classList.remove('hidden');
+    } else if (!t.startsWith('piece:')) pop.classList.add('hidden');
   }
-  showHelp(v) { $('help').classList.toggle('hidden', !v); if (!v) this.h.helpClosed && this.h.helpClosed(); }
-  get modalOpen() { return ['help', 'result', 'gacha', 'dialog'].some((id) => !$(id).classList.contains('hidden')); }
-
-  toast(t1, t2, t3, time = 2.6) {
-    const el = $('toast');
-    el.innerHTML = `<div class="t1">${t1}</div><div class="t2">${t2}</div>${t3 ? `<div class="t3">${t3}</div>` : ''}`;
-    el.classList.add('show');
-    this.toastT = time;
-  }
-  tick(dt) { if (this.toastT > 0) { this.toastT -= dt; if (this.toastT <= 0) $('toast').classList.remove('show'); } }
 
   setPaused(p) { $('b-pause').textContent = p ? '▶' : '⏸'; $('b-pause').classList.toggle('on', p); }
   setSpeed(s) { document.querySelectorAll('[data-speed]').forEach((b) => b.classList.toggle('on', +b.dataset.speed === s)); }
-  setCam(m) { $('cam-mode').value = m; }
-  setAutoCam(a) { $('b-autocam').classList.toggle('on', a); }
+  setView(v) { document.querySelectorAll('[data-view]').forEach((b) => b.classList.toggle('on', b.dataset.view === v)); }
+  setAutoCam(a, suspended) {
+    $('b-autocam').classList.toggle('on', a);
+    $('autocam-chip').classList.toggle('hidden', !(a && suspended));
+  }
 
   // ---------------- 定期更新 ----------------
   refresh() {
     const g = this.g, P = g.progress;
     if (!g.stageId) return;
     const def = g.def;
-    $('stage-name').textContent = `${def.name}「${def.title}」`;
-    $('goal-text').textContent = `🎯 ${def.goalText}`;
+    $('stage-name').innerHTML = `${def.name}<small>${def.title}</small>`;
+    const next = g.nextCheckpoint();
+    const pf = g.preflight();
+    const bp = g.buildProgress();
+    const total = bp.total;
+    const frontIdx = this.frontIndex();
+    if (g.records[g.stageId].cleared) $('next-goal').innerHTML = '👑 クリア済み！ さらに記録をのばそう';
+    else if (next) {
+      const need = Math.max(0, next.slotIndex + 2 - frontIdx);
+      $('next-goal').innerHTML = `🎯 次の中間ゴール${next.index + 1}「${next.def.name}」${need > 0 ? `まで あと <b>${need}</b> 個` : '：<b>建設済み！ 倒して届けよう</b>'}`;
+    } else {
+      const need = Math.max(0, total - frontIdx);
+      $('next-goal').innerHTML = `🏁 最終ゴールまで ${need > 0 ? `あと <b>${need}</b> 個` : '<b>完成！ 倒してゴールへ！</b>'}`;
+    }
+    // 経験値（1枚 = 1XP）
     $('xp-lv').textContent = `Lv.${P.level}`;
-    $('xp-text').textContent = `ドミノ経験値 ${fmt(P.xp)} / ${fmt(P.need())}`;
-    $('xp-left').textContent = `あと${fmt(P.need() - P.xp)}枚でガチャ！`;
     $('xp-fill').style.width = `${(P.xp / P.need()) * 100}%`;
+    $('xp-left').textContent = `あと${fmt(P.need() - P.xp)}枚でガチャ`;
     const tk = P.tickets.length;
     $('xp-tickets').classList.toggle('hidden', !tk);
-    $('xp-tickets').textContent = `ガチャ ×${tk}`;
-    const bp = g.buildProgress();
-    $('s-progress').textContent = `${fmt(bp.standing)} / ${fmt(bp.total)}`;
-    $('s-pfill').style.width = `${bp.total ? (bp.standing / Math.max(bp.total, def.target)) * 100 : 0}%`;
-    $('s-ptarget').style.left = `${Math.min(100, (def.target / Math.max(bp.total, def.target)) * 100)}%`;
-    $('s-target').textContent = `${fmt(def.target)}個` + (g.course.connected() ? '（ゴール接続済）' : '（未接続）');
-    $('s-best').textContent = fmt(g.records[g.stageId].best);
-    $('s-total').textContent = fmt(g.stats.totalToppled);
-    $('s-stock').textContent = `${fmt(g.stock)}${g.crate.count ? `（前線 ${g.crate.count}）` : ''}`;
-    // 稼働状況
-    const counts = {};
-    for (const w of g.workers.list) {
-      const c = (counts[w.role] ||= { n: 0, busy: 0 });
-      c.n++; if (w.state === 'walk' || (w.state === 'act' && w.pose !== 'idle' && w.pose !== 'shrug')) c.busy++;
-    }
-    let html = '';
-    for (const r of Object.keys(ROLE_LABEL)) if (counts[r]) html += `<span>${ROLE_LABEL[r]} <b class="${counts[r].busy ? 'busy' : ''}">${counts[r].busy}/${counts[r].n}</b></span>`;
-    if (g.level('machine')) html += `<span>🚜 設置機 <b class="${g.machine.hopper ? 'busy' : ''}">${g.machine.hopper ? '稼働' : '補給待ち'}</b></span>`;
-    if (g.level('train')) html += `<span>🚂 列車 <b>${g.train.load ? '運搬中' : '積込'}</b></span>`;
-    $('s-crew').innerHTML = html || '<span>（まだ誰もいない）</span>';
-    const locked = g.stoppers.filter((s) => s.locked).length;
-    $('s-stoppers').textContent = `${g.stoppers.length}個${locked ? `（🔒${locked}）` : ''}${g.stoppers.some((s) => s.gate) ? '・ゲート' : ''}`;
-    const r = g.roomba;
-    $('s-roomba').classList.toggle('hidden', !r);
-    if (r) $('s-roomba').textContent = r.state === 'dock' ? `🤖 ルンバ出動まで ${Math.ceil(r.timer)}秒（次：${r.pattern.name}）` : r.state === 'return' ? '🤖 ルンバ帰還中' : `🤖 ルンバ巡回中！（${r.pattern.name}）`;
-    $('s-alarm').classList.toggle('hidden', !g.alarm);
+    $('xp-tickets').textContent = `🎁×${tk}`;
+    // 建設進捗（設計図の何個目まで並んでいるか）
+    $('pl-fill').style.width = `${total ? (frontIdx / total) * 100 : 0}%`;
+    const marks = (g.checkpoints || []).map((c) => `<div class="mk ${c.done ? 'done' : ''}" style="left:${(c.slotIndex / total) * 100}%" title="${c.def.name}">${c.index + 1}</div>`).join('') + `<div class="mk goal" style="left:100%">🏁</div>`;
+    if (marks !== this._marks) { $('pl-marks').innerHTML = marks; this._marks = marks; }
+    const crew = g.workers.list.length;
+    $('pl-text').innerHTML = `建設 <b>${fmt(frontIdx)}</b> / ${fmt(total)} 個 ・ 在庫 ${fmt(g.stock + g.crate.count)} ・ 人員 ${crew}人${g.level('machine') ? ' ＋ 自動設置機' : ''} ・ 最長連鎖 ${fmt(g.records[g.stageId].best)}`;
+    // 小さな警告（確認ダイアログの代わり）
+    const w = [];
+    if (pf.fallen) w.push(`倒れたまま ${pf.fallen}個（🧹で起こせる）`);
+    if (pf.locked) w.push(`🔒ロック中のストッパー ${pf.locked}個`);
+    if (g.roomba && g.roomba.state !== 'dock') w.push('🤖 ルンバ巡回中！');
+    else if (g.roomba) w.push(`<span class="info">🤖 ルンバ出動まで ${Math.ceil(g.roomba.timer)}秒（次：${g.roomba.pattern.name}）</span>`);
+    if (g.alarm) w.push('⚠ 警報発令中');
+    const wh = w.map((x) => (x.startsWith('<span class="info">') ? `<div class="w info">${x.slice(19, -7)}</div>` : `<div class="w">${x}</div>`)).join('');
+    if (wh !== this._warns) { $('warns').innerHTML = wh; this._warns = wh; }
     // ボタン
     const building = g.mode === 'build';
-    const pf = g.preflight();
-    $('b-run').disabled = !building || pf.total === 0;
-    $('b-run').classList.toggle('ready', building && pf.connected && pf.unbuilt === 0 && pf.fallen === 0 && pf.total >= def.target);
+    $('b-run').disabled = !building || g.gachaActive;
+    $('b-run').classList.toggle('ready', building && frontIdx >= total && !pf.fallen);
     $('b-tidy').disabled = !building;
     $('b-rewind').disabled = !building || g.rewinds <= 0 || !g.snapshot;
     $('rewind-sub').textContent = `×${g.rewinds}`;
-    // ランHUD
+    // 連鎖中
     const run = g.run;
+    document.body.classList.toggle('mode-run', !!run && run.kind === 'main');
     $('runhud').classList.toggle('hidden', !run);
     if (run) {
       $('rh-count').textContent = fmt(run.count);
-      $('rh-target').textContent = run.kind === 'test' ? ` / 区間 ${run.total}` : ` / ${fmt(def.target)}`;
       $('rh-piggy').classList.toggle('hidden', !(g.piggy && run.kind === 'main'));
       if (g.piggy) $('rh-piggy').querySelector('b').textContent = fmt(run.piggy);
     }
-    // バナー
-    let banner = '';
-    if (!run && building) {
-      if (pf.total === 0) banner = '「✏ 描く」でスタートからゴールまでコースを描こう';
-      else if (!pf.connected) banner = 'コースがゴールにつながっていません（ピンクの輪へ）';
-      else if (pf.total < def.target) banner = `コースが短い：あと${fmt(def.target - pf.total)}個ぶん延ばそう`;
-      else if (pf.unbuilt) banner = `建設中… 残り ${fmt(pf.unbuilt)} 個`;
-      else if (pf.fallen) banner = `倒れたドミノが ${pf.fallen} 個あります（片付けで起こそう）`;
-      else banner = '準備完了！「▶ 倒す！」で本番！';
-    }
-    if (g.mode === 'test') banner = '🧪 区間テスト中…（終わると元に戻ります）';
-    $('banner').textContent = banner;
-    $('vignette').classList.toggle('show', !!g.alarm && !!r && r.state !== 'dock');
-    this.pieceList();
+    $('vignette').classList.toggle('show', !!g.alarm && !!g.roomba && g.roomba.state !== 'dock');
+    if (!$('panel').classList.contains('hidden') && this.curTab !== 'settings') this.renderTab(this.curTab, true);
   }
 
-  pieceList() {
+  /** 設計図の先頭から連続して立っている数（＝建設の先頭） */
+  frontIndex() {
     const g = this.g;
-    const list = $('piece-list');
-    const types = Object.keys(PIECE_LABEL).filter((t) => g.level(t) > 0);
-    const key = types.map((t) => `${t}${g.placeableUsed(t)}/${g.placeableCount(t)}`).join('|') + (g.branchesLeft() > 0 ? 'b' + g.branchesLeft() : '');
-    if (key === this._pkey) return;
-    this._pkey = key;
-    list.innerHTML = types.length ? '' : '<div class="hint">ガチャでミニカー・ビー玉・高架橋・ベル・バリケード・センサーを手に入れると、ここから配置できます。</div>';
-    for (const t of types) {
-      const b = document.createElement('div');
-      const left = g.placeableCount(t) - g.placeableUsed(t);
-      b.className = 'piece' + (left <= 0 ? ' empty' : '');
-      b.dataset.piece = t;
-      b.innerHTML = `<span>${PIECE_ICON[t]} ${PIECE_LABEL[t]}</span><small>残り ${left}</small>`;
-      b.onclick = () => this.h.setTool('piece:' + t);
-      list.appendChild(b);
-    }
-    if (g.branchesLeft() > 0) list.insertAdjacentHTML('beforeend', `<div class="hint">🔱 分岐：あと${g.branchesLeft()}か所（描くモードでコースの途中から描き始める）</div>`);
+    const f = g.frontSlot();
+    const main = g.course.segments[0];
+    if (!main) return 0;
+    return f && f.seg === main ? f.i : main.slots.length;
   }
 
-  suggested() {
-    const g = this.g;
-    const el = $('sug-list'); el.innerHTML = '';
-    g.def.suggested.forEach((s, i) => {
-      const b = document.createElement('button');
-      b.textContent = `📐 ${s.name}`;
-      b.onclick = () => this.confirm('おすすめルートを引きますか？', '今のコースは消えます（建っているドミノは在庫へ）。', () => this.h.suggested(i));
-      el.appendChild(b);
-    });
+  // ---------------- 連鎖終了の短い演出 ----------------
+  flash(r, done) {
+    const el = $('flash');
+    const lines = [];
+    if (r.cleared) lines.push('<div class="f-line clear">🎉 STAGE CLEAR！</div>');
+    if (r.newBest && r.prevBest > 0) lines.push('<div class="f-line rec">NEW RECORD！</div>');
+    for (const c of r.checkpoints || []) lines.push(`<div class="f-line cp">🎯 中間ゴール${c.index + 1}「${c.name}」到達！</div>`);
+    if (r.presents) lines.push(`<div class="f-line cp">🎁 プレゼントドミノ ×${r.presents}</div>`);
+    if (!r.cleared && r.reason) lines.push(`<div class="f-line fail">📍 ${r.reason}</div>`);
+    const xp = `+${fmt(r.xp.total)} XP${r.xp.record ? `（うち新記録ボーナス +${fmt(r.xp.record)}）` : ''}${r.levelUps ? ` ・ レベルアップ×${r.levelUps}` : ''}`;
+    el.innerHTML = `<div class="f-big">${fmt(r.count)}連鎖！</div>${lines.join('')}<div class="f-xp">${xp}</div>`;
+    el.classList.remove('hidden');
+    clearTimeout(this._flashTO);
+    const hold = r.cleared ? 3600 : 2300;
+    this._flashTO = setTimeout(() => { el.classList.add('hidden'); done && done(); }, hold);
   }
 
-  buildList() {
-    const g = this.g, P = g.progress;
-    const el = $('build-list');
+  // ---------------- メニュー ----------------
+  togglePanel(v) {
+    const p = $('panel');
+    const show = v ?? p.classList.contains('hidden');
+    p.classList.toggle('hidden', !show);
+    if (show) this.tab(this.curTab);
+  }
+  tab(t) {
+    this.curTab = t;
+    document.querySelectorAll('[data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === t));
+    this.renderTab(t);
+  }
+  renderTab(t, soft = false) {
+    const g = this.g, P = g.progress, body = $('pn-body');
     let html = '';
-    for (const [id, on] of Object.entries(P.evolutions)) if (on) { const e = EVOLUTIONS[id]; html += `<div class="bpart evo"><div class="ic">${e.icon}</div><div class="nm">${e.name}</div><div class="lv">進化</div><div class="cat">${e.desc}</div></div>`; }
-    const owned = Object.entries(P.parts).filter(([, v]) => v > 0);
-    if (!owned.length && !html) html = '<div class="hint">まだパーツがありません。ドミノを倒して経験値を貯め、ガチャを引こう。</div>';
-    for (const [id, lv] of owned) {
-      const p = PARTS[id];
-      html += `<div class="bpart"><div class="ic">${p.icon}</div><div class="nm">${p.name}</div><div class="lv">${p.consumable ? `所持 ${g.rewinds}` : `Lv.${lv}`}</div><div class="cat">${CATEGORY[p.category].label}・${RARITY[p.rarity].label}</div></div>`;
+    if (t === 'records') {
+      const rec = g.records[g.stageId];
+      html += `<h3>このステージ</h3><table><tr><td>最長連鎖</td><td>${fmt(rec.best)}</td></tr><tr><td>挑戦回数</td><td>${rec.attempts}</td></tr><tr><td>中間ゴール</td><td>${(g.checkpoints || []).filter((c) => c.done).length} / ${(g.checkpoints || []).length}</td></tr><tr><td>累計転倒数</td><td>${fmt(g.stats.totalToppled)}</td></tr><tr><td>ルンバに倒された</td><td>${fmt(g.stats.roombaKnocks)}</td></tr><tr><td>緊急出動</td><td>${fmt(g.stats.emergencies)}</td></tr></table>`;
+      html += '<h3>最近の連鎖</h3><table>' + (g.history || []).slice(0, 15).map((h) => `<tr><td>S${h.stage} ${new Date(h.at).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}　${h.cleared ? '👑クリア' : h.reason || ''}${h.record ? '　🏆' : ''}${h.checkpoints.length ? `　🎯${h.checkpoints.join(',')}` : ''}</td><td>${fmt(h.count)}連鎖 +${fmt(h.xp)}XP</td></tr>`).join('') + '</table>';
+    } else if (t === 'build') {
+      for (const [id, on] of Object.entries(P.evolutions)) if (on) { const e = EVOLUTIONS[id]; html += `<div class="bp"><div class="ic">${e.icon}</div><div class="nm">${e.name}</div><div class="lv">進化</div><div class="ds">${e.desc}</div></div>`; }
+      const owned = Object.entries(P.parts).filter(([, v]) => v > 0);
+      if (!owned.length) html += '<p>まだパーツがありません。ドミノを倒して経験値を貯めよう。</p>';
+      for (const [id, lv] of owned) {
+        const p = PARTS[id];
+        const unused = !p.stages.includes(g.stageId);
+        html += `<div class="bp"><div class="ic">${p.icon}</div><div class="nm">${p.name}${unused ? '（このステージでは使わない）' : ''}</div><div class="lv">${p.consumable ? `所持 ${g.rewinds}` : `Lv.${lv}`}</div><div class="ds">${CATEGORY[p.category].label}・${RARITY[p.rarity].label}</div></div>`;
+      }
+      html += '<h3>合体進化</h3>' + Object.entries(EVOLUTIONS).filter(([id]) => !P.evolutions[id]).map(([, e]) => `<div class="bp"><div class="ic">${e.icon}</div><div class="nm">${e.name}</div><div class="lv"></div><div class="ds">${Object.entries(e.requires).map(([k, v]) => `${PARTS[k].name} ${Math.min(P.lv(k), v)}/${v}${P.lv(k) >= v ? '✓' : ''}`).join('　')}</div></div>`).join('');
+    } else if (t === 'crew') {
+      const counts = {};
+      for (const w of g.workers.list) { const c = (counts[w.role] ||= { n: 0, busy: 0 }); c.n++; if (w.state === 'walk' || (w.state === 'act' && w.pose !== 'idle' && w.pose !== 'shrug')) c.busy++; }
+      html += '<table>' + Object.keys(ROLE_LABEL).filter((r) => counts[r]).map((r) => `<tr><td>${ROLE_LABEL[r]}</td><td>${counts[r].busy} / ${counts[r].n}人 作業中</td></tr>`).join('');
+      if (g.level('machine')) html += `<tr><td>🚜 自動設置機</td><td>${g.machine.hopper ? `稼働中（ホッパー${g.machine.hopper}）` : '補給待ち'}</td></tr>`;
+      if (g.level('train')) html += `<tr><td>🚂 運搬列車</td><td>${g.train.load ? '運搬中' : '積み込み'}</td></tr>`;
+      html += `<tr><td>🦺 ストッパー</td><td>${g.stoppers.length}個${g.stoppers.some((s) => s.gate) ? '（ゲート）' : ''}</td></tr><tr><td>🧱 在庫</td><td>${fmt(g.stock)}（前線 ${g.crate.count}）</td></tr></table>`;
+      if (!g.workers.list.length) html += '<p>まだ誰もいません。最初のガチャで建設担当が加わります。</p>';
+    } else if (t === 'stages') {
+      html += [1, 2].map((id) => { const st = STAGES[id], rec = g.records[id]; const locked = id > g.unlockedStage; return `<div class="bp"><div class="ic">${locked ? '🔒' : id === g.stageId ? '▶' : '🗺'}</div><div class="nm">${st.name}「${st.title}」</div><div class="lv">${rec.cleared ? '👑' : ''}</div><div class="ds">${st.goalText}｜最長 ${fmt(rec.best)}　${locked ? 'STAGE 1 をクリアすると解放' : `<button class="pbtn" data-go="${id}">${id === g.stageId ? 'ここにいる' : 'ここへ行く'}</button>`}</div></div>`; }).join('');
+      html += '<p>パーツとレベルはステージ間で引き継がれます。建設中のドミノはステージごとに保存されます。</p>';
+    } else if (t === 'settings') {
+      const s = this.h.getSettings();
+      html += `<div class="set-row"><label>画質</label><select id="set-q"><option value="low">低（軽い）</option><option value="mid">中（おすすめ）</option><option value="high">高（被写界深度）</option></select></div>
+        <div class="set-row"><label>BGM 音量</label><input id="set-bgm" type="range" min="0" max="1" step="0.05" value="${s.music}"></div>
+        <div class="set-row"><label>効果音 音量</label><input id="set-sfx" type="range" min="0" max="1" step="0.05" value="${s.sfx}"></div>
+        <div class="set-row"><label>ガチャ早送り</label><input id="set-gfast" type="checkbox" ${s.gachaFast ? 'checked' : ''}></div>
+        <p style="color:#d9c9b6">セーブは自動（建設中のドミノも保存）。</p>
+        <button class="pbtn" id="set-save">💾 今すぐセーブ</button><button class="pbtn" id="set-load">📂 最後のセーブを読み込む</button><button class="pbtn warn" id="set-reset">↺ 最初からやり直す</button>`;
+    } else if (t === 'help') {
+      html += `<h3>遊び方</h3><ol><li>床に描かれた<b>設計図（点線）</b>に沿って、ドミノを先頭から並べます。<b>クリック</b>で1個、<b>長押し</b>で連続。</li>
+        <li>いつでも<b>「▶ 倒す！」</b>。途中までしか並んでいなくても倒せます。倒れた<b>1枚 = 1XP</b>。上のゲージが満タンでガチャ。</li>
+        <li>連鎖が<b>中間ゴール</b>の装置に届くと、<b>確定ガチャ</b>（各中間ゴールで一度きり）。</li>
+        <li>ガチャで人や機械を増やすと、建設が自動になり速くなります。倒れたドミノも起こしてくれます。</li>
+        <li>スタートからの一本の連鎖が<b>最終ゴール装置</b>を動かせばクリア。ステージ2ではルンバから列を守ろう。</li></ol>
+        <h3>カメラ</h3><p>左ドラッグ：回転／右ドラッグ：移動／ホイール：カーソル位置へズーム／WASD：移動／ダブルクリック：そこへ注目<br>上の「建設・観賞・追跡・俯瞰」で視点を切り替え、⟲（Home）で建設現場へ戻る。</p>
+        <h3>キー</h3><p>Enter：倒す／R（長押し）：片付け／1〜4：道具／B・V・F・O：建設・観賞・追跡・俯瞰／Home：視点リセット／P：一時停止／Space：ガチャ演出をスキップ／1〜3：ガチャの選択</p>`;
     }
-    // 進化の手がかり
-    const hints = Object.entries(EVOLUTIONS).filter(([id]) => !P.evolutions[id]).map(([, e]) => `${e.icon} ${e.name}：` + Object.entries(e.requires).map(([k, v]) => `${PARTS[k].name}${P.lv(k) >= v ? '✅' : `Lv${v}`}`).join('＋'));
-    html += `<div class="sec">合体設計図（進化）</div><div class="hint">${hints.join('<br>') || 'すべて進化済み！'}</div>`;
-    el.innerHTML = html;
+    if (soft && t !== 'records' && t !== 'crew') return;
+    body.innerHTML = html;
+    if (t === 'settings') {
+      const s = this.h.getSettings();
+      $('set-q').value = s.quality;
+      $('set-q').onchange = (e) => this.h.setSetting('quality', e.target.value);
+      $('set-bgm').oninput = (e) => this.h.setSetting('music', +e.target.value);
+      $('set-sfx').oninput = (e) => this.h.setSetting('sfx', +e.target.value);
+      $('set-gfast').onchange = (e) => this.h.setSetting('gachaFast', e.target.checked);
+      $('set-save').onclick = () => this.h.save(true);
+      $('set-load').onclick = () => this.h.load();
+      $('set-reset').onclick = () => this.confirm('最初からやり直しますか？', 'レベル・パーツ・建設・記録がすべて消えます（以前のバージョンのセーブは消えません）。', () => this.h.reset());
+    }
+    if (t === 'stages') body.querySelectorAll('[data-go]').forEach((b) => (b.onclick = () => { this.togglePanel(false); this.h.goStage(+b.dataset.go); }));
   }
 
   // ---------------- ダイアログ ----------------
@@ -192,143 +225,16 @@ export class UI {
     const row = card.querySelector('.btn-row');
     for (const b of buttons) {
       const el = document.createElement('button');
-      el.className = 'big-btn ' + (b.cls || 'start');
+      el.className = b.cls || '';
       el.innerHTML = b.label;
       el.onclick = () => { $('dialog').classList.add('hidden'); b.fn && b.fn(); };
       row.appendChild(el);
     }
     $('dialog').classList.remove('hidden');
   }
-  confirm(title, body, fn) { this.dialog(`<h2>${title}</h2><p>${body}</p>`, [{ label: 'はい', fn }, { label: 'やめる', cls: 'tidy' }]); }
-
-  preflight(pf, go) {
-    const warn = [];
-    if (!pf.connected) warn.push('コースがゴール装置につながっていません');
-    if (pf.unbuilt) warn.push(`未建設のマスが <b>${pf.unbuilt}</b> 個あります（すき間で止まります）`);
-    if (pf.fallen) warn.push(`倒れたままのドミノが <b>${pf.fallen}</b> 個あります`);
-    if (pf.locked) warn.push(`🔒ロック中のストッパーが <b>${pf.locked}</b> 個あります（本番でも外れません）`);
-    if (pf.total < this.g.def.target) warn.push(`コースが目標（${this.g.def.target}個）より短いです：${pf.total}個`);
-    if (!warn.length) return go();
-    this.dialog(`<h2>本当に倒しますか？</h2><ul>${warn.map((w) => `<li>${w}</li>`).join('')}</ul><p>途中までの練習として倒すこともできます（倒れた枚数ぶん経験値が入ります）。</p>`,
-      [{ label: '▶ それでも倒す', fn: go }, { label: '準備に戻る', cls: 'tidy' }]);
-  }
-
-  settings() {
-    const s = this.h.getSettings();
-    this.dialog(`<h2>設定</h2>
-      <div class="set-row"><label>画質</label><select id="set-q"><option value="low">低（軽い）</option><option value="mid">中</option><option value="high">高（AO・被写界深度）</option></select></div>
-      <div class="set-row"><label>BGM 音量</label><input id="set-bgm" type="range" min="0" max="1" step="0.05" value="${s.music}"></div>
-      <div class="set-row"><label>効果音 音量</label><input id="set-sfx" type="range" min="0" max="1" step="0.05" value="${s.sfx}"></div>
-      <div class="set-row"><label>自動カメラ</label><input id="set-auto" type="checkbox" ${s.autoCam ? 'checked' : ''}></div>
-      <p class="hint">セーブはブラウザに自動保存されます（建設中のコース・ドミノ配置も保存）。</p>
-      <div class="btn-row"><button id="set-load" class="big-btn tidy">💾 最後のセーブを読み込む</button><button id="set-reset" class="big-btn rewind">↺ 最初からやり直す</button></div>`,
-    [{ label: 'とじる' }]);
-    $('set-q').value = s.quality;
-    $('set-q').onchange = (e) => this.h.setSetting('quality', e.target.value);
-    $('set-bgm').oninput = (e) => this.h.setSetting('music', +e.target.value);
-    $('set-sfx').oninput = (e) => this.h.setSetting('sfx', +e.target.value);
-    $('set-auto').onchange = (e) => this.h.setSetting('autoCam', e.target.checked);
-    $('set-load').onclick = () => { $('dialog').classList.add('hidden'); this.h.load(); };
-    $('set-reset').onclick = () => this.confirm('最初からやり直しますか？', 'レベル・パーツ・コース・記録がすべて消えます（Ver.0.1のセーブは消えません）。', () => this.h.reset());
-  }
-
-  stageSelect() {
-    const g = this.g;
-    const btns = [1, 2].map((id) => {
-      const st = STAGES[id], rec = g.records[id];
-      const locked = id > g.unlockedStage;
-      return { label: `${locked ? '🔒 ' : ''}${st.name}<small>${st.title}｜最大 ${rec.best}${rec.cleared ? '｜クリア済' : ''}</small>`, cls: id === g.stageId ? 'start' : 'tidy', fn: locked ? () => this.toast('まだ行けません', 'STAGE 1 をクリアしよう', '') : () => this.h.goStage(id) };
-    });
-    btns.push({ label: 'とじる', cls: 'rewind' });
-    this.dialog('<h2>ステージ</h2><p>獲得したパーツとレベルはステージ間で引き継がれます。各ステージのコースは別々に保存されます。</p>', btns);
-  }
-
+  confirm(title, body, fn) { this.dialog(`<h2>${title}</h2><p>${body}</p>`, [{ label: 'はい', fn }, { label: 'やめる', cls: 'sub' }]); }
+  get modalOpen() { return !$('dialog').classList.contains('hidden'); }
   comingSoon(fn) {
     this.dialog(`<div class="dog"><div class="paw">🐾</div><div class="soon">COMING SOON</div><h2>STAGE 3　巨大な犬</h2><p>ドミノの前にしっぽを振る巨大な犬が現れる…！<br>次回、「おすわりベル」で犬をおすわりさせながら、もっと長い連鎖に挑め！</p></div>`, [{ label: 'たのしみ！', fn }]);
-  }
-
-  // ---------------- 結果 ----------------
-  showResult(r, next) {
-    const g = this.g;
-    let title;
-    if (r.cleared) title = '<div class="res-title clear">🎉 STAGE CLEAR！ 🎉</div>';
-    else if (r.goal) title = '<div class="res-title">ゴール装置は動いた！でも目標数に届かず…</div>';
-    else title = `<div class="res-title fail">連鎖ストップ</div>`;
-    const reason = !r.cleared && r.reason ? `<div class="res-reason">📍 止まった理由：${r.reason}<br><small>赤いマークの場所を確認して、直して再挑戦しよう</small></div>` : '';
-    const rows = [
-      ['倒れたドミノ', `${fmt(r.count)} 個`],
-      ['目標', `${fmt(r.target)} 個`],
-      ['自己ベスト', r.newBest ? `🏆 ${fmt(r.count)}（更新！）` : fmt(Math.max(r.prevBest, r.count))],
-      ['経験値（倒れた枚数×長さボーナス）', `+${fmt(r.xp.base)}`],
-    ];
-    if (r.xp.record) rows.push(['新記録ボーナス', `+${fmt(r.xp.record)}`]);
-    if (r.xp.orbs) rows.push(['経験値の星（磁石）', `+${fmt(r.xp.orbs)}`]);
-    if (r.xp.bell) rows.push(['おうえんボーナス', `+${fmt(r.xp.bell)}`]);
-    if (g.piggy) rows.push(['欲張り貯金箱', r.cleared ? `+${fmt(r.piggy)}（全額）` : `+${fmt(r.piggy)}（${fmt(r.piggyLost)} 失った…）`]);
-    if (r.presents) rows.push(['🎁 プレゼントドミノ', `ガチャ ×${r.presents}`]);
-    if (r.chests) rows.push(['🧰 宝箱', `ガチャ ×${r.chests}`]);
-    if (r.gacha) rows.push(['🎰 ドミノ式ガチャマシン', 'ガチャ ×1']);
-    if (r.roombaHits) rows.push(['🤖 ルンバに倒された', `${r.roombaHits} 個`]);
-    rows.push(['合計経験値', `<b>+${fmt(r.xp.total)}</b>`]);
-    const tickets = g.progress.tickets.length;
-    const card = $('result-card');
-    card.innerHTML = `${title}<div class="res-big">${fmt(r.count)}<small> 連鎖</small></div>${reason}
-      <div class="res-grid">${rows.map(([a, b]) => `<span>${a}</span><b>${b}</b>`).join('')}</div>
-      ${r.levelUps ? `<p style="text-align:center;font-weight:800;color:#1f6fe0">レベルアップ ×${r.levelUps}！</p>` : ''}
-      <div class="btn-row"><button id="res-next" class="big-btn start">${tickets ? `🎰 ガチャを開ける（${tickets}回）` : 'OK'}</button></div>`;
-    $('result').classList.remove('hidden');
-    $('res-next').onclick = () => { $('result').classList.add('hidden'); next(); };
-  }
-
-  // ---------------- ガチャ ----------------
-  /** 未開封のガチャを順番に開ける */
-  openGachas(done) {
-    const g = this.g, P = g.progress;
-    if (!P.tickets.length) { $('gacha').classList.add('hidden'); done && done(); return; }
-    const ticket = P.tickets.shift();
-    const picks = P.offer(g.stageId, ticket);
-    $('gacha').classList.remove('hidden');
-    $('gacha-title').textContent = `${ticket.label}　（残り ${P.tickets.length}）`;
-    $('gacha-sub').textContent = '';
-    const cap = $('gacha-capsule');
-    cap.classList.remove('hide');
-    const best = picks.reduce((m, p) => Math.max(m, p.evo ? 3 : ['common', 'rare', 'epic', 'legendary'].indexOf(PARTS[p.id].rarity)), 0);
-    cap.style.background = ['linear-gradient(180deg,#ff6b6b 50%,#fff 50%)', 'linear-gradient(180deg,#4dabf7 50%,#fff 50%)', 'linear-gradient(180deg,#b07cff 50%,#fff 50%)', 'linear-gradient(180deg,#ffc531 50%,#fff 50%)'][best];
-    const cards = $('gacha-cards');
-    cards.innerHTML = '';
-    g.audio.gachaSpin();
-    setTimeout(() => {
-      cap.classList.add('hide');
-      g.audio.gachaReveal(['common', 'rare', 'epic', 'legendary'][best]);
-      picks.forEach((p, i) => {
-        const c = document.createElement('div');
-        if (p.evo) {
-          const e = EVOLUTIONS[p.evo];
-          c.className = 'gcard evo';
-          c.innerHTML = `<span class="rar" style="background:#ff4d6d">合体設計図</span><div class="gi">${e.icon}</div><div class="gn">${e.name}</div><div class="gl">進化！</div><div class="gd">${e.desc}</div>`;
-        } else {
-          const part = PARTS[p.id], lv = P.lv(p.id);
-          c.className = `gcard ${part.rarity}`;
-          c.innerHTML = `${lv === 0 ? '<span class="new">NEW</span>' : ''}<span class="rar" style="background:${RARITY[part.rarity].color}">${RARITY[part.rarity].label}</span>
-            <div class="gi">${part.icon}</div><div class="gn">${part.name}</div><div class="gl">${part.consumable ? `所持 ${g.rewinds} → ${g.rewinds + 2}` : `Lv.${lv} → ${lv + 1}`}</div>
-            <div class="gc">${CATEGORY[part.category].icon} ${CATEGORY[part.category].label}${p.guaranteed ? '・おすすめ' : ''}</div><div class="gd">${part.desc(lv)}</div>`;
-        }
-        c.onclick = () => {
-          if (cards.dataset.done) return;
-          cards.dataset.done = '1';
-          cards.querySelectorAll('.gcard').forEach((x) => x.classList.add(x === c ? 'pick' : 'fade'));
-          const res = this.h.takePick(p);
-          if (res.kind === 'evo') {
-            const fl = document.createElement('div'); fl.className = 'evo-flash'; document.getElementById('app').appendChild(fl);
-            setTimeout(() => fl.remove(), 1300);
-            $('gacha-sub').textContent = `✨ 進化！ ${EVOLUTIONS[res.id].name} が現場に登場！`;
-          } else $('gacha-sub').textContent = `${PARTS[res.id].name} を獲得！`;
-          setTimeout(() => { delete cards.dataset.done; this.openGachas(done); }, res.kind === 'evo' ? 1800 : 1000);
-        };
-        cards.appendChild(c);
-        setTimeout(() => c.classList.add('show'), 120 + i * 160);
-      });
-      $('gacha-sub').textContent = `1つ選ぼう（${picks.length}択）`;
-    }, 900);
   }
 }

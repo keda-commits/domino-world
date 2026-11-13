@@ -10,6 +10,7 @@ import {
 } from '../world/devices.js';
 import { Roomba } from '../world/roomba.js';
 import { GoalMachine } from '../world/goalMachine.js';
+import { Checkpoint } from '../world/checkpoints.js';
 import { Workers } from '../actors/workers.js';
 import { Depot, Crate, Machine, Train, Factory } from './facilities.js';
 import { PlanView } from './planView.js';
@@ -106,12 +107,8 @@ export class Game {
       this.stage.obstacles.push({ x: c.x, z: c.z, r: 2.2, roomba: true, build: true });
       return { ...c, i, mesh, opened: false, openT: 0 };
     });
-    const gm = this.def.gachaMachine;
-    this.gachaMachine = { ...gm, mesh: gachaMachineMesh(gm.category === 'defense' ? '#4dabf7' : '#ff922b'), used: false, spin: 0 };
-    this.gachaMachine.mesh.position.set(gm.x, 0, gm.z);
-    this.gachaMachine.mesh.rotation.y = Math.atan2(-gm.x, -gm.z);
-    this.scene.add(this.gachaMachine.mesh);
-    this.stage.obstacles.push({ x: gm.x, z: gm.z, r: 2.4, roomba: true, build: true });
+    // （v0.2 の床置きガチャマシン・宝箱・プレゼントは廃止。報酬は連鎖で作動する中間ゴールから）
+    this.gachaMachine = { x: 1e6, z: 1e6, used: true, spin: 0, category: 'build', mesh: new THREE.Group() };
     // 最終ゴールの宝箱（クリア時に開く）
     const fc = chestMesh(true);
     const fcx = gp.x + Math.cos(gp.yaw) * 4.5, fcz = gp.z - Math.sin(gp.yaw) * 4.5;
@@ -122,6 +119,10 @@ export class Game {
     this.piggy = null;
     this.tower = null; this.hq = null; this.hqPos = null;
     this.stock = CFG.startStock;
+    this.history = this.history || [];
+    // CPU が設計した固定コース
+    this.buildDesignedCourse();
+    this.setupCheckpoints();
     if (data) this.applyStageSave(data);
     this.syncPartsToWorld(true);
     this.refreshCourse();
@@ -138,6 +139,7 @@ export class Game {
     for (const p of this.placed) this.scene.remove(p.mesh);
     for (const b of this.tempBarricades) this.scene.remove(b.mesh);
     this.goal.dispose();
+    for (const cp of this.checkpoints || []) cp.dispose();
     if (this.roomba) this.roomba.dispose();
     for (const m of this.markers) { if (m.mesh) this.scene.remove(m.mesh); m.orbs.forEach((o) => this.scene.remove(o.mesh)); }
     for (const c of this.chests) this.scene.remove(c.mesh);
@@ -146,7 +148,7 @@ export class Game {
     if (this.tower) this.scene.remove(this.tower);
     if (this.hq) this.scene.remove(this.hq);
     this.depots.forEach((d) => d.dispose());
-    this.scene.remove(this.planView.ghost, this.planView.lines, this.planView.stopMarker, this.planView.strokeLine, this.planView.portMarks);
+    this.scene.remove(this.planView.ghost, this.planView.lines, this.planView.stopMarker, this.planView.strokeLine, this.planView.portMarks, this.planView.next);
     this.stage.dispose();
     this.physics.world.free();
     this.stageId = 0;
@@ -209,6 +211,27 @@ export class Game {
     this.workers.refreshLooks();
   }
 
+  /** ガチャで選んだパーツを反映し、現場に登場したもの（人・設備）を記録する */
+  onGachaPick(p) {
+    const before = new Set(this.workers.list);
+    const res = this.progress.take(p);
+    if (p.id === 'rewind') this.rewinds += 2;
+    this.syncPartsToWorld(true);
+    this.lastSpawned = this.workers.list.filter((w) => !before.has(w));
+    const id = p.evo || p.id;
+    const firstOf = (role) => { const w = this.workers.list.find((x) => x.role === role); return w ? w.pos.clone() : null; };
+    const T = {
+      machine: () => this.machine.pos.clone(), fastLine: () => this.machine.pos.clone(), train: () => this.train.pos.clone(),
+      factory: () => this.factory.group.position.clone(), watchtower: () => this.tower && this.tower.position.clone(),
+      stopperHQ: () => this.hq && this.hq.position.clone(), massBuild: () => firstOf('builder'), autoSafety: () => firstOf('stopperCrew'),
+      piggy: () => this.piggy && this.piggy.mesh.position.clone(),
+    };
+    this.lastSpawnTarget = T[id] ? T[id]() : null;
+    if (p.evo) { this.workers.list.forEach((w) => { if (Math.random() < 0.7) w.act(1.6, 'cheer', () => w.think()); }); }
+    this.emit('pick', res);
+    return res;
+  }
+
   guardPost(i) {
     const posts = this.def.guardPosts;
     const [x, z] = posts[i % posts.length];
@@ -219,20 +242,86 @@ export class Game {
   refreshCourse() {
     this.course.pieces = this.pieces;
     this.course.refresh();
-    // 特殊マーカー（プレゼント・四つ葉）をスロットに割り当て
+    // 中間ゴールのドミノは幅広、特別なドミノ（プレゼント・四つ葉）はコース設計に組み込み
     for (const sl of this.course.allSlots) sl.special = null;
-    for (const m of this.markers) {
-      if (m.consumed || m.type === 'orbs') continue;
-      let best = null, bd = 1.6 * 1.6;
-      for (const sl of this.course.allSlots) { const d = (sl.x - m.x) ** 2 + (sl.z - m.z) ** 2; if (d < bd && sl.kind === 'normal') { bd = d; best = sl; } }
-      if (best) best.special = m;
-      if (m.mesh) m.mesh.userData.linked = !!best;
+    const main = this.course.segments[0];
+    if (main) {
+      for (const cp of this.checkpoints || []) if (main.slots[cp.slotIndex]) main.slots[cp.slotIndex].kind = 'wide';
+      for (const sp of this.specials || []) { const sl = main.slots[sp.at]; if (sl && !sp.consumed && sl.kind === 'normal') sl.special = sp; }
     }
     // ベルの取り付け先
     for (const p of this.placed) if (p.type === 'bell') p.slot = this.nearestSlot(p.x, p.z, 2.5);
     this.unbuiltDirty = true;
     this.planView.setPorts(this.course.openOutputs(), this.course.openInputs(), this.course.openEnds());
   }
+
+  /** ステージ定義の点列から固定コースを作る */
+  buildDesignedCourse() {
+    const pts = this.def.course.map(([x, z]) => ({ x, z }));
+    const dense = [];
+    for (let k = 0; k < pts.length - 1; k++) for (let t = 0; t < 1; t += 0.2) dense.push({ x: pts[k].x + (pts[k + 1].x - pts[k].x) * t, z: pts[k].z + (pts[k + 1].z - pts[k].z) * t });
+    dense.push(pts[pts.length - 1]);
+    this.course.addStroke(dense);
+    this.specials = (this.def.specials || []).map((sp, i) => ({ ...sp, i, consumed: false }));
+    this.refreshCourse();
+  }
+
+  /** 中間ゴール装置を、まっすぐな区間の空いている側に置く */
+  setupCheckpoints() {
+    (this.checkpoints || []).forEach((c) => c.dispose());
+    this.checkpoints = [];
+    const main = this.course.segments[0];
+    if (!main) return;
+    const slots = main.slots;
+    const straight = (i) => slots[i - 2] && slots[i + 3] && Math.abs(Math.atan2(Math.sin(slots[i + 3].yaw - slots[i - 2].yaw), Math.cos(slots[i + 3].yaw - slots[i - 2].yaw))) < 0.03;
+    (this.def.checkpoints || []).forEach((def, index) => {
+      let idx = -1;
+      for (let d = 0; d < 40 && idx < 0; d++) for (const c of [def.at + d, def.at - d]) if (idx < 0 && straight(c)) idx = c;
+      if (idx < 0) idx = def.at;
+      const sl = slots[idx];
+      let side = 1;
+      for (const sd of [1, -1]) {
+        const nx = Math.cos(sl.yaw), nz = -Math.sin(sl.yaw);
+        let ok = true;
+        for (const off of [0.55, 1.2, 2.3, 3.2]) {
+          const px = sl.x + nx * sd * off, pz = sl.z + nz * sd * off;
+          if (this.stage.blocked(px, pz, 0.6) || !this.stage.inBounds(px, pz, 0.8)) ok = false;
+          for (const o of this.course.allSlots) if (Math.abs(o.i - sl.i) > 6 && (o.x - px) ** 2 + (o.z - pz) ** 2 < 1.1) ok = false;
+        }
+        if (ok) { side = sd; break; }
+      }
+      const cp = new Checkpoint(this.scene, this.physics, sl, side, def, index);
+      cp.slotIndex = idx;
+      cp.onTrigger = (c) => this.onCheckpoint(c);
+      this.checkpoints.push(cp);
+      // 装置のまわりは建設・ルンバの障害物
+      this.stage.obstacles.push({ x: cp.pos.x, z: cp.pos.z, r: 1.3, roomba: true, build: true });
+    });
+    this.refreshCourse();
+  }
+
+  /** 中間ゴールが作動した（スタートからの連鎖で届いたときだけ報酬） */
+  onCheckpoint(cp) {
+    const run = this.run;
+    const sl = this.course.segments[0].slots[cp.slotIndex];
+    if (!run || run.kind !== 'main' || run.checkpoints.includes(cp)) return;
+    // 羽根が先に動いても、幅広ドミノが連鎖として数えられるまで待つ（同じフレーム内の順序差を吸収）
+    if (!run.chainSlots.has(sl)) { if (!run.pendingCps.includes(cp)) run.pendingCps.push(cp); return; }
+    run.pendingCps = run.pendingCps.filter((c) => c !== cp);
+    run.checkpoints.push(cp);
+    this.audio.checkpoint();
+    const p = cp.pos;
+    this.fx.floatAt(tmp.set(p.x, 3.2, p.z), `🎯 中間ゴール${cp.index + 1}「${cp.def.name}」到達！`, 'big', 2.4, 1.5);
+    this.fx.confetti(tmp.set(p.x, 1, p.z), 70, 7);
+    if (cp.def.type === 'alarm' && this.roomba) {
+      this.roomba.recall(60);
+      this.fx.floatAt(tmp.set(p.x, 4.4, p.z), '🔔 警報！ルンバは充電台へ', 'warn', 2.4);
+    }
+    // 近くの人たちが喜ぶ
+    for (const w of this.workers.list) if (w.state !== 'flee' && w.pos.distanceTo(p) < 30) w.act(1.4 + Math.random() * 0.8, 'cheer', () => w.think());
+    this.emit('checkpoint', cp);
+  }
+  nextCheckpoint() { return (this.checkpoints || []).find((c) => !c.done) || null; }
 
   nearestSlot(x, z, maxD = Infinity) {
     let best = null, bd = maxD * maxD;
@@ -331,6 +420,13 @@ export class Game {
     return true;
   }
 
+  /** ほぼ止まっているか（スリープしない寄りかかりも含む） */
+  isStill(d) {
+    if (d.frozen || !d.body || d.body.isSleeping()) return true;
+    const v = d.body.linvel(), w = d.body.angvel();
+    return v.x * v.x + v.y * v.y + v.z * v.z < 0.01 && w.x * w.x + w.y * w.y + w.z * w.z < 0.04;
+  }
+
   /** 倒れたドミノ（その場）を探す */
   findRestandJob(gnome, maxD = Infinity, preferAccident = false) {
     // 本番中も復旧係だけは、連鎖の波より十分先のドミノを直しに行ける
@@ -338,12 +434,17 @@ export class Game {
     if (this.mode !== 'build' && !duringRun) return null;
     const minOrder = duringRun ? (this.run.frontOrder < 0 ? 12 : this.run.frontOrder + 25) : -Infinity;
     let best = null, bd = maxD * maxD;
+    // 倒れているドミノ一覧（手前のドミノが上に倒れ込んでいるスロットは、先にそちらを起こす）
+    const lying = [];
+    for (const e of this.dominoes.list) if (e.slot && !e.removed && (e.toppled || !this.dominoes.isStandingAt(e, e.slot))) { const t = e.body.translation(); lying.push({ e, x: t.x, z: t.z, o: this.ord(e.slot) }); }
+    const covered = (d) => { const o = this.ord(d.slot); for (const l of lying) if (l.e !== d && l.o < o && (l.x - d.slot.x) ** 2 + (l.z - d.slot.z) ** 2 < 0.36) return true; return false; };
     for (const d of this.dominoes.list) {
       if (!d.slot || d.claim || d.removed) continue;
       // 倒れた・寄りかかって傾いた・ずれたドミノ（スロットにきちんと立っていない）
       if (!d.toppled && this.dominoes.isStandingAt(d, d.slot)) continue;
+      if (covered(d)) continue;
       if (duringRun && (d.slot.order < minOrder || this.run.toppled.has(d))) continue;
-      if (!d.frozen && d.body && !d.body.isSleeping()) continue; // 倒れている最中は待つ
+      if (!this.isStill(d)) continue; // 倒れている最中は待つ（寄りかかって止まったものは対象）
       const t = d.body.translation();
       const dist2s = (t.x - d.slot.x) ** 2 + (t.z - d.slot.z) ** 2;
       if (dist2s > CFG.restandDistance ** 2) continue;
@@ -387,12 +488,12 @@ export class Game {
     for (const d of this.dominoes.list) {
       if (d.claim || d.removed) continue;
       let loose = !d.slot;
-      if (d.slot && d.toppled && (d.frozen || d.body.isSleeping())) {
+      if (d.slot && !this.dominoes.isStandingAt(d, d.slot) && this.isStill(d)) {
         const t = d.body.translation();
         if ((t.x - d.slot.x) ** 2 + (t.z - d.slot.z) ** 2 > CFG.restandDistance ** 2) loose = true;
       }
       if (!loose) continue;
-      if (!d.frozen && !d.body.isSleeping()) continue;
+      if (!this.isStill(d)) continue;
       const t = d.body.translation();
       const dd = (t.x - gnome.pos.x) ** 2 + (t.z - gnome.pos.z) ** 2;
       if (dd < bd) { bd = dd; best = d; }
@@ -414,7 +515,7 @@ export class Game {
       if (!d.toppled && (!d.slot || this.dominoes.isStandingAt(d, d.slot))) continue;
       const t = d.body.translation();
       if ((t.x - p.x) ** 2 + (t.z - p.z) ** 2 > 3.2 * 3.2) continue;
-      if (!d.frozen && !d.body.isSleeping()) continue;
+      if (!this.isStill(d)) continue;
       if (d.slot && (t.x - d.slot.x) ** 2 + (t.z - d.slot.z) ** 2 <= CFG.restandDistance ** 2) { this.restand(d); n++; }
       else { this.collect(d); this.stock++; n++; }
       if (n >= 12) break;
@@ -429,7 +530,7 @@ export class Game {
     for (const d of this.dominoes.list) {
       if (!d.slot || d.claim || d.removed) continue;
       if (!d.toppled && this.dominoes.isStandingAt(d, d.slot)) continue;
-      if (!d.frozen && !d.body.isSleeping()) continue;
+      if (!this.isStill(d)) continue;
       const t = d.body.translation();
       if ((t.x - d.slot.x) ** 2 + (t.z - d.slot.z) ** 2 > CFG.restandDistance ** 2) { this.collect(d); this.stock++; return true; }
       const o = this.ord(d.slot);
@@ -797,8 +898,9 @@ export class Game {
     this.run = {
       id: (this.runSeq = (this.runSeq || 0) + 1), kind: 'main', t: 0, lastTopple: 0, toppled: new Set(), count: 0,
       frontPos: null, frontOrder: -1, presents: 0, clovers: 0, chest: [], gacha: false, bells: 0, piggy: 0,
-      goal: false, startPushed: false, roombaHits: 0, rogue: new Set(), chainSlots: new Set(), chainPieces: new Set(),
+      goal: false, startPushed: false, roombaHits: 0, rogue: new Set(), chainSlots: new Set(), chainPieces: new Set(), checkpoints: [], pendingCps: [],
     };
+    for (const cp of this.checkpoints) cp.reset();
     // ストッパー解除（ゲートは波が来る直前まで閉じたまま）
     let rel = 0;
     for (const s of this.stoppers) if (!s.gate && s.release()) rel++;
@@ -1001,7 +1103,8 @@ export class Game {
     this.mode = 'build';
     if (run.kind === 'test') return this.endTest();
     const rec = this.records[this.stageId];
-    const cleared = run.goal && run.count >= this.stage.target;
+    // クリア条件：スタートからの一本の連鎖が最終ゴール装置を作動させたこと（枚数は問わない）
+    const cleared = run.goal;
     const { stop, reason } = cleared ? { stop: null, reason: '' } : this.analyze();
     this.planView.showStop(stop);
     const prevBest = rec.best;
@@ -1009,17 +1112,20 @@ export class Game {
     let piggy = 0;
     if (this.piggy) piggy = cleared ? run.piggy : Math.floor(run.piggy / 2);
     const xp = xpForRun(run.count, prevBest, piggy);
-    const orbs = this.collectOrbs(run);
-    xp.orbs = orbs * CFG.orbXP;
-    xp.total += xp.orbs;
     if (run.bells && !this.roomba) { xp.total += 30 * run.bells; xp.bell = 30 * run.bells; }
     const ups = this.progress.addXP(xp.total);
     // 特別報酬のガチャ券
     const T = this.progress.tickets;
     for (let i = 0; i < run.presents; i++) T.push({ source: 'present', label: '🎁 プレゼントドミノ', rarityMin: 'rare' });
     if (run.clovers) this.progress.extraChoice = 2;
-    for (const c of run.chest) T.push({ source: 'chest', label: '🧰 宝箱のお宝', rarityMin: 'rare', choices: 4 });
-    if (run.gacha) T.push({ source: 'machine', label: `🎰 ドミノ式ガチャ（${CATEGORY[this.gachaMachine.category].label}）`, category: this.gachaMachine.category, choices: 4, ignoreLevel: true });
+    // 中間ゴール：初めて届いたときだけ確定ガチャ（一度きり）
+    const newCps = [];
+    for (const cp of run.checkpoints) {
+      if (cp.done) continue;
+      cp.done = true;
+      newCps.push(cp);
+      T.unshift({ source: 'checkpoint', label: `🎯 中間ゴール${cp.index + 1}「${cp.def.name}」到達報酬`, rarityMin: 'rare', category: cp.def.category, choices: 3, ignoreLevel: true });
+    }
     const newBest = run.count > prevBest;
     if (newBest) { rec.best = run.count; if (prevBest > 0) T.push({ source: 'trophy', label: '🏆 記録更新トロフィー', rarityMin: 'rare' }); }
     if (cleared && !rec.cleared) {
@@ -1033,10 +1139,13 @@ export class Game {
     this.rearmPending = true;
     const result = {
       stage: this.stageId, count: run.count, target: this.stage.target, cleared, goal: run.goal, stop, reason,
-      xp, levelUps: ups, newBest, prevBest, presents: run.presents, chests: run.chest.length, gacha: run.gacha, clovers: run.clovers,
+      xp, levelUps: ups, newBest, prevBest, presents: run.presents, chests: 0, gacha: false, clovers: run.clovers,
+      checkpoints: newCps.map((c) => ({ index: c.index, name: c.def.name })), reached: run.checkpoints.map((c) => c.index),
       piggy, piggyLost: this.piggy && !cleared ? run.piggy - piggy : 0, roombaHits: run.roombaHits, time: run.t,
     };
     this.lastResult = result;
+    this.history.unshift({ at: Date.now(), stage: this.stageId, count: run.count, cleared, reason, xp: xp.total, record: newBest, checkpoints: result.checkpoints.map((c) => c.index + 1) });
+    this.history.length = Math.min(this.history.length, 40);
     this.run = null;
     for (const g of this.workers.list) g.think();
     this.emit('runEnd', result);
@@ -1090,7 +1199,7 @@ export class Game {
     const released = [];
     for (const s of this.stoppers) if (s.slot.order >= a && s.slot.order < b && !s.locked && s.armed) { s.release(); released.push(s); }
     this.mode = 'test';
-    this.run = { kind: 'test', t: 0, lastTopple: 0, toppled: new Set(), count: 0, frontOrder: -1, frontPos: null, a, b, snap, temp, released, total: slots.length, rogue: new Set(), chainSlots: new Set(), chainPieces: new Set() };
+    this.run = { kind: 'test', t: 0, lastTopple: 0, toppled: new Set(), count: 0, frontOrder: -1, frontPos: null, a, b, snap, temp, released, total: slots.length, rogue: new Set(), chainSlots: new Set(), chainPieces: new Set(), checkpoints: [], pendingCps: [] };
     this.dominoes.push(first.domino, Math.sin(first.yaw), Math.cos(first.yaw), 0.07);
     this.audio.start();
     this.emit('testStart', this.run);
@@ -1108,6 +1217,7 @@ export class Game {
     }
     if (run.temp) run.temp.dispose();
     for (const s of run.released) s.arm();
+    for (const cp of this.checkpoints) cp.reset();
     for (const p of this.pieces) p.reset && p.reset();
     this.run = null;
     this.unbuiltDirty = true;
@@ -1154,8 +1264,10 @@ export class Game {
     this.physics.update(dt);
     this.dominoes.update(dt);
     if (this.run) this.updateRun(dt);
+    if (this.run && this.run.pendingCps.length) for (const cp of [...this.run.pendingCps]) this.onCheckpoint(cp);
     this.goal.update(dt);
     for (const p of this.pieces) p.update(dt);
+    for (const cp of this.checkpoints) cp.update(dt);
     for (const s of this.stoppers) s.update(dt);
     if (this.roomba) this.roomba.update(dt, this);
     this.updateThrows(dt);
@@ -1238,6 +1350,9 @@ export class Game {
       placed: this.placed.map((p) => ({ type: p.type, x: p.x, z: p.z, yaw: p.yaw })),
       built, loose,
       stoppers: this.stoppers.map((s) => [slotKey(s.slot), slotKey(s.next), s.locked ? 1 : 0, s.emergency ? 1 : 0]),
+      designed: true,
+      checkpoints: this.checkpoints.map((c) => (c.done ? 1 : 0)),
+      specials: this.specials.map((sp) => (sp.consumed ? 1 : 0)),
       markers: this.markers.map((m) => (m.consumed ? 1 : 0)),
       chests: this.chests.map((c) => (c.opened ? 1 : 0)),
       gachaUsed: this.gachaMachine.used,
@@ -1247,6 +1362,7 @@ export class Game {
     };
   }
   applyStageSave(d) {
+    if (d.designed !== true) d = { ...d, pieces: [] };
     this.pieceSeq = 0;
     for (const p of d.pieces || []) {
       this.pieceSeq = Math.max(this.pieceSeq, p.id - 1);
@@ -1255,23 +1371,12 @@ export class Game {
       this.pieces.push(piece);
       this.pieceSeq = Math.max(this.pieceSeq, p.id);
     }
-    this.course.pieces = this.pieces;
-    const c = d.course || { segments: [] };
-    this.course.nextSeg = c.nextSeg || 1;
-    // 親から順に復元（分岐やピースの出口は親が先に必要）
-    const pending = [...(c.segments || [])];
-    let guard = 0;
-    while (pending.length && guard++ < 200) {
-      const s = pending.shift();
-      if (s.from.type === 'branch' && !this.course.segById(s.from.seg)) { pending.push(s); continue; }
-      const seg = { id: s.id, pts: s.pts.map(([x, z]) => ({ x, z })), from: s.from, to: s.to, slots: [] };
-      this.course.segments.push(seg);
-      this.course.rebuild(seg);
-      seg.to = s.to;
-      this.course.rebuild(seg);
-    }
-    this.course.pieces = this.pieces;
-    this.course.refresh();
+    // v0.3：コースは CPU 設計の固定コース。v0.2 の自由設計コースは引き継げないので、
+    // 置いてあったドミノは在庫に戻す（数は失わない）
+    const designed = d.designed === true;
+    if (!designed) { d = { ...d, stock: (d.stock || 0) + (d.built || []).length + (d.loose || []).length, built: [], loose: [], stoppers: [], placed: [] }; }
+    (d.checkpoints || []).forEach((v, i) => { if (this.checkpoints[i] && v) this.checkpoints[i].done = true; });
+    (d.specials || []).forEach((v, i) => { if (this.specials[i] && v) this.specials[i].consumed = true; });
     (d.markers || []).forEach((v, i) => { const m = this.markers[i]; if (m && v) { m.consumed = true; if (m.mesh) this.scene.remove(m.mesh); } });
     (d.chests || []).forEach((v, i) => { if (this.chests[i] && v) { this.chests[i].opened = true; this.chests[i].openT = 1; this.chests[i].mesh.userData.lid.rotation.x = -1.9; } });
     this.gachaMachine.used = !!d.gachaUsed;

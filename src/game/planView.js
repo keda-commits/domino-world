@@ -7,8 +7,9 @@ const MAX = 3200;
 export class PlanView {
   constructor(scene) {
     this.scene = scene;
-    const geo = new THREE.BoxGeometry(CFG.dominoW, CFG.dominoH, CFG.dominoT);
-    this.mat = new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.32, depthWrite: false });
+    // 設計図：未建設のマスは床に描いた小さな印（半透明ドミノを立てて並べない）
+    const geo = new THREE.BoxGeometry(CFG.dominoW, 0.012, CFG.dominoT * 1.3);
+    this.mat = new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.55, depthWrite: false });
     this.ghost = new THREE.InstancedMesh(geo, this.mat, MAX);
     this.ghost.frustumCulled = false;
     this.ghost.renderOrder = 2;
@@ -34,6 +35,14 @@ export class PlanView {
     scene.add(this.strokeLine);
     this.portMarks = new THREE.Group();
     scene.add(this.portMarks);
+    // 次に置く場所の目印
+    this.next = new THREE.Group();
+    const arrow = new THREE.Mesh(new THREE.ConeGeometry(0.22, 0.45, 4), new THREE.MeshStandardMaterial({ color: '#ffd166', emissive: '#ff9f1c', emissiveIntensity: 0.6 }));
+    arrow.rotation.x = Math.PI; arrow.position.y = 1.7;
+    const ringN = new THREE.Mesh(new THREE.RingGeometry(0.35, 0.45, 24), new THREE.MeshBasicMaterial({ color: '#ffd166', transparent: true, opacity: 0.8, side: THREE.DoubleSide }));
+    ringN.rotation.x = -Math.PI / 2; ringN.position.y = 0.03;
+    this.next.add(arrow, ringN);
+    scene.add(this.next);
     this._m = new THREE.Matrix4(); this._q = new THREE.Quaternion(); this._e = new THREE.Euler(0, 0, 0, 'YXZ'); this._p = new THREE.Vector3(); this._s = new THREE.Vector3(1, 1, 1);
     this._c = new THREE.Color();
     this.selection = null;
@@ -60,6 +69,9 @@ export class PlanView {
     this.stopMarker.rotation.y += dt * 2;
     this.stopMarker.children[0].position.y = 3 + Math.sin(performance.now() * 0.006) * 0.4;
     this.portMarks.children.forEach((m) => { m.rotation.y += dt * 1.5; });
+    const fs = game.mode === 'build' ? game.frontSlot() : null;
+    this.next.visible = !!fs;
+    if (fs) { this.next.position.set(fs.x, fs.y || 0, fs.z); this.next.children[0].position.y = 1.6 + Math.abs(Math.sin(performance.now() * 0.005)) * 0.35; this.next.rotation.y += dt * 2; }
     if (this.timer > 0) return;
     this.timer = 0.15;
     const course = game.course;
@@ -69,16 +81,15 @@ export class PlanView {
     for (const sl of course.allSlots) {
       const hasStanding = sl.domino && !sl.domino.toppled;
       const selected = sel && sl.order >= sel.a && sl.order <= sel.b;
-      if (hasStanding && !selected && !sl.warn) continue;
+      if (hasStanding && !selected) continue;
       if (n >= MAX) break;
       this._e.set(0, sl.yaw, 0);
       this._q.setFromEuler(this._e);
-      this._p.set(sl.x, (sl.y || 0) + CFG.dominoH / 2, sl.z);
-      const sc = hasStanding ? 1.08 : 1;
-      this._s.set(sc, sc, sc);
+      this._p.set(sl.x, (sl.y || 0) + 0.012, sl.z);
+      this._s.set(1, 1, 1);
       this._m.compose(this._p, this._q, this._s);
       this.ghost.setMatrixAt(n, this._m);
-      const col = selected ? '#ffe066' : sl.warn ? '#ff4d4d' : sl.domino ? '#ffb4a8' : editing ? '#bfe6ff' : '#e8f6ff';
+      const col = selected ? '#ffe066' : sl.domino ? '#ff8a7a' : '#d8ecff';
       this.ghost.setColorAt(n, this._c.set(col));
       n++;
     }
@@ -97,7 +108,7 @@ export class PlanView {
       for (const sl of s.slots) arr.push(sl.x, (sl.y || 0) + 0.04, sl.z);
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.Float32BufferAttribute(arr, 3));
-      const l = new THREE.Line(g, new THREE.LineDashedMaterial({ color: s.to ? '#7cd4ff' : '#ffd166', dashSize: 0.4, gapSize: 0.3 }));
+      const l = new THREE.Line(g, new THREE.LineDashedMaterial({ color: '#cfe8ff', dashSize: 0.25, gapSize: 0.35, transparent: true, opacity: 0.55 }));
       l.computeLineDistances();
       this.lines.add(l);
     }
@@ -106,6 +117,7 @@ export class PlanView {
   /** 線を引ける出口・つなげられる入口を光らせる */
   setPorts(outs, ins, ends) {
     this.portMarks.clear();
+    if (!this.freeDesign) return; // ステージ制では線を描かないので出入口の輪は出さない
     const mk = (p, color) => {
       const m = new THREE.Mesh(new THREE.TorusGeometry(1.0, 0.12, 8, 24), new THREE.MeshBasicMaterial({ color }));
       m.rotation.x = Math.PI / 2;

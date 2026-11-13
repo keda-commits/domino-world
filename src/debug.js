@@ -14,7 +14,7 @@ export function installDebug(ctx) {
 
   const api = {
     goStage: (id) => { game.unlockedStage = Math.max(game.unlockedStage, id); ctx.goStage(id); },
-    gacha: (n = 1, opts = {}) => { for (let i = 0; i < n; i++) game.progress.tickets.push({ source: 'debug', label: 'デバッグガチャ', ...opts }); ui.openGachas(() => game.syncPartsToWorld()); },
+    gacha: (n = 1, opts = {}) => { for (let i = 0; i < n; i++) game.progress.tickets.push({ source: 'debug', label: 'デバッグガチャ', ...opts }); ctx.startGacha(); },
     xp: (n) => { const u = game.progress.addXP(n); return u; },
     setPart: (id, lv) => { game.progress.parts[id] = Math.max(0, lv); game.syncPartsToWorld(true); },
     evolve: (id) => { game.progress.evolutions[id] = true; game.syncPartsToWorld(); },
@@ -61,6 +61,8 @@ export function installDebug(ctx) {
     runToEnd: (maxSec = 400) => { let t = 0; while (game.run && t < maxSec) { game.update(1 / 30); t += 1 / 30; } return game.lastResult; },
     stock: (n) => { game.stock += n; game.stats.produced += n; },
     save: () => ctx.save(true),
+    /** 比較撮影用：カメラを決まった位置に固定する */
+    setCam: (px, py, pz, tx, ty, tz) => { const r = ctx.rig; r.mode = 'free'; r.goal = null; r.userTouched = 1e9; r.camera.position.set(px, py, pz); r.controls.target.set(tx, ty, tz); r.controls.update(); },
     /** 性能計測：frames 回「更新＋描画」して1フレームの平均時間を測る */
     bench: (frames = 60, q = null) => {
       if (q) ctx.view.setQuality(q);
@@ -98,9 +100,35 @@ export function installDebug(ctx) {
         g.syncPartsToWorld(true);
       };
       if (!g.course.allSlots.length) g.loadSuggested(opts.route || 0);
+      // プレイヤーと同じ placePiece で防衛パーツを置く（ルンバの巡回路がドミノ列に入る手前にバリケード、序盤にベル）
+      const placeDefense = () => {
+        if (!g.roomba) return;
+        const sorted = g.course.allSlots.filter((s) => s.order >= 0).sort((a, b) => a.order - b.order);
+        for (const want of [120, 380, 700]) {
+          if (g.placeableUsed('bell') >= g.placeableCount('bell')) break;
+          const s = sorted[want]; if (!s || g.placed.some((p) => p.type === 'bell' && Math.abs(p.x - s.x) + Math.abs(p.z - s.z) < 6)) continue;
+          for (const side of [1, -1, 1.6, -1.6]) { const x = s.x + Math.cos(s.yaw) * side, z = s.z - Math.sin(s.yaw) * side; if (g.placePiece('bell', x, z, s.yaw, true)) { note(`ベル設置 #${want}`); break; } }
+        }
+        for (const pat of g.roomba.def.patterns) {
+          const pts = pat.pts;
+          for (let i = 0; i < pts.length - 1; i++) {
+            if (g.placeableUsed('barricade') >= g.placeableCount('barricade')) return;
+            const [ax, az] = pts[i], [bx, bz] = pts[i + 1]; const len = Math.hypot(bx - ax, bz - az); const ux = (bx - ax) / len, uz = (bz - az) / len;
+            for (let t = 0; t < len; t += 1) {
+              const x = ax + ux * t, z = az + uz * t;
+              if (!g.nearestSlot(x, z, 4.5)) continue;
+              const bx2 = x - ux * 2.5, bz2 = z - uz * 2.5, yaw = Math.atan2(ux, uz);
+              if (!g.placed.some((p) => p.type === 'barricade' && Math.hypot(p.x - bx2, p.z - bz2) < 5) && g.placePiece('barricade', bx2, bz2, yaw, true)) note(`バリケード設置 (${Math.round(bx2)},${Math.round(bz2)})`);
+              break;
+            }
+          }
+        }
+      };
+      let defT = 0;
       while (g.time - t0 < sec) {
         g.update(dt);
         if (g.mode !== 'build') continue;
+        if ((defT -= dt) <= 0) { defT = 5; placeDefense(); }
         // 手で置く（建設小人が少ないうち）・手で片付け（回収がいないうち）
         if (g.level('builder') < 2) { placeAcc += dt * 2.5; while (placeAcc >= 1) { placeAcc -= 1; g.manualPlace(); } }
         if (g.level('collector') + g.level('restorer') === 0) { for (let i = 0; i < 2; i++) g.manualRestoreStep(); }
@@ -111,7 +139,7 @@ export function installDebug(ctx) {
         const pf = g.preflight();
         const full = pf.unbuilt === 0 && pf.fallen === 0 && pf.connected;
         const best = g.records[g.stageId].best;
-        const goalRun = full;
+        const goalRun = full || (g.roomba && pf.unbuilt === 0 && pf.fallen <= 8 && prefix >= best);
         const practice = prefix >= Math.max(20, Math.floor(best * 1.25)) && g.time - lastRunAt > 25;
         const roombaOk = !g.roomba || (g.roomba.state === 'dock' && g.roomba.timer > 8) || g.placed.some((p) => p.type === 'bell') || opts.ignoreRoomba;
         if ((goalRun || practice) && roombaOk) {
@@ -130,7 +158,7 @@ export function installDebug(ctx) {
     },
     wipe: () => ctx.reset(),
   };
-  window.__dbg = api;
+  window.__dbg = api; Object.defineProperty(api, "ctx", { value: ctx, enumerable: false });
 
   const partOpts = Object.entries(PARTS).map(([id, p]) => `<option value="${id}">${p.icon} ${p.name}</option>`).join('');
   const evoOpts = Object.entries(EVOLUTIONS).map(([id, e]) => `<option value="${id}">${e.icon} ${e.name}</option>`).join('');
