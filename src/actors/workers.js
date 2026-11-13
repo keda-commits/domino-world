@@ -57,7 +57,22 @@ export class Gnome {
   // ---------- 基本動作 ----------
   goto(targetFn, onArrive) { this.state = 'walk'; this.targetFn = targetFn; this.onArrive = onArrive; }
   act(time, pose, onDone) { this.state = 'act'; this.timer = time; this.pose = pose; this.poseT = 0; this.onDone = onDone; }
-  wait(time, pose = 'idle') { this.act(time, pose, () => this.think()); }
+  wait(time, pose = 'idle') {
+    // 手が空いたら（長めの待ち）自分の待機所へ戻る。ガチャの前などに人が溜まらないように
+    const home = time >= 1 && (pose === 'idle' || pose === 'shrug') && this.game.mode === 'build' && this.role !== 'guard' ? this.game.campPos(this.role) : null;
+    if (home && Math.hypot(home.x - this.pos.x, home.z - this.pos.z) > 4) {
+      const off = new THREE.Vector3(Math.cos(this.id * 2.4) * 2, 0, Math.sin(this.id * 2.4) * 2).add(home);
+      return this.goto(() => off, () => this.act(time, pose, () => this.think()));
+    }
+    this.act(time, pose, () => this.think());
+  }
+  /** 待機所へ向かう（ガチャで加わった直後など） */
+  goHome() {
+    const home = this.game.campPos(this.role);
+    if (!home) return this.think();
+    const off = new THREE.Vector3(Math.cos(this.id * 2.4) * 2, 0, Math.sin(this.id * 2.4) * 2).add(home);
+    this.goto(() => off, () => this.act(0.8, 'salute', () => this.think()));
+  }
   say(text, cls = '') { this.game.fx.floatObj(this.root, text, cls, 1.4); }
   releaseJob() {
     if (!this.job) return;
@@ -296,6 +311,31 @@ export class Gnome {
       }
     }
   }
+  /** 投げたドミノが当たった（dx,dz：飛んできた向き、sp：速さ） */
+  hitBy(dx, dz, sp) {
+    const g = this.game;
+    this.hitCool = 0.8;
+    // 少し押される（物理的にのけぞる）
+    const push = Math.min(0.6, sp * 0.04);
+    this.pos.x += dx * push; this.pos.z += dz * push;
+    g.stats.hitReactions = (g.stats.hitReactions || 0) + 1;
+    if (sp > 9 && this.state !== 'trip') {
+      // 強く当たった：転ぶ（持っていた資材を落とし、近くのドミノを巻き込むことも）
+      this.trip();
+      this.say(['いてて…', 'うわぁ！', 'なにするの！'][Math.floor(Math.random() * 3)], 'warn');
+      const near = g.nearestSlot(this.pos.x, this.pos.z, 1.2);
+      if (near && near.domino && !near.domino.toppled && Math.random() < 0.5) g.dominoes.push(near.domino, dx, dz, 0.05);
+    } else {
+      // 軽く当たった：驚いて飛び上がり、作業を少し中断
+      this.releaseJob();
+      if (this.m.held) this.m.held.visible = false;
+      this.state = 'act'; this.pose = 'surprised'; this.poseT = 0; this.timer = 0.9;
+      this.onDone = () => this.think();
+      this.say(['いてっ！', 'わっ！', 'こら〜！', 'びっくりした！'][Math.floor(Math.random() * 4)], '');
+      this.yaw = Math.atan2(-dx, -dz); // 飛んできた方を向く
+    }
+    g.audio.squeak && g.audio.squeak(1.3);
+  }
   oops() {
     this.state = 'act'; this.pose = 'oops'; this.poseT = 0; this.timer = 1.2;
     this.onDone = () => this.think();
@@ -442,7 +482,7 @@ export class Workers {
   hire(role, quiet = false) {
     const g = this.game;
     const dep = g.depots[0];
-    const spawn = (role === 'guard' || role === 'restorer') && g.hqPos ? g.hqPos.clone() : dep.pos.clone();
+    const spawn = g.campPos(role) || ((role === 'guard' || role === 'restorer') && g.hqPos ? g.hqPos.clone() : dep.pos.clone());
     spawn.x += (Math.random() - 0.5) * 2; spawn.z += 2 + Math.random() * 1.5;
     const gn = new Gnome(role, this.nextId++, g, spawn);
     if (role === 'guard') gn.home = g.guardPost(this.count('guard'));

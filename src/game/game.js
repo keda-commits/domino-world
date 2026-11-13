@@ -11,6 +11,8 @@ import {
 import { Roomba } from '../world/roomba.js';
 import { GoalMachine } from '../world/goalMachine.js';
 import { Checkpoint } from '../world/checkpoints.js';
+import { Mouse, RollingBall } from '../world/threats.js';
+import { campMarker, StorageShelf, ROLE_CAMP, SMALL_PARTS } from '../world/camps.js';
 import { Workers } from '../actors/workers.js';
 import { Depot, Crate, Machine, Train, Factory } from './facilities.js';
 import { PlanView } from './planView.js';
@@ -51,6 +53,8 @@ export class Game {
     this.stageId = id;
     this.def = STAGES[id];
     this.physics = new Physics();
+    this.physics.onStep((dt) => this.hand && this.hand.step(dt));
+    if (this.hand) { this.hand.held = null; this.hand.flying.clear(); }
     this.stage = createStage(id, this.scene, this.physics);
     this.stage.extraBlockers = [(x, z, m, forRoomba) => this.pieceBlocks(x, z, m, forRoomba)];
     this.dominoes = new Dominoes(this.scene, this.physics);
@@ -64,7 +68,13 @@ export class Game {
     this.machine.pos.set(this.depots[0].pos.x + 3, 0, this.depots[0].pos.z + 3);
     this.train = new Train(this);
     this.train.pos.copy(this.depots[0].pos);
-    const fp = this.depots[0].pos.clone().add(new THREE.Vector3(6, 0, 3));
+    // 獲得物の行き先（看板）と倉庫の棚
+    const camps = this.def.camps || {};
+    this.campMeshes = [];
+    for (const [k, c] of Object.entries(camps)) if (k !== 'storage') { const m = campMarker(k); m.position.set(c.x, 0, c.z); this.scene.add(m); this.campMeshes.push(m); }
+    this.shelf = camps.storage ? new StorageShelf(this.scene, camps.storage) : null;
+    if (camps.storage) this.stage.obstacles.push({ x: camps.storage.x, z: camps.storage.z, hw: 3.8, hd: 1.2, yaw: 0, roomba: true, build: true });
+    const fp = camps.machines ? new THREE.Vector3(camps.machines.x, 0, camps.machines.z) : this.depots[0].pos.clone().add(new THREE.Vector3(6, 0, 3));
     this.factory = new Factory(this, fp);
     this.workers = new Workers(this);
     this.stoppers = [];
@@ -126,11 +136,67 @@ export class Game {
     if (data) this.applyStageSave(data);
     this.syncPartsToWorld(true);
     this.refreshCourse();
+    // 小さな脅威（ネズミ・ボール）
+    this.threats = [];
+    if (this.def.mouse) this.threats.push(new Mouse(this, this.def.mouse));
+    if (this.def.ball) this.threats.push(new RollingBall(this, this.def.ball));
     this.emit('stageLoaded', id);
+  }
+
+  // ================= 小さな脅威と防衛チュートリアル =================
+  get flags() { return (this.records.flags ||= {}); }
+  /** ネズミが出てくるか（ステージ1は中間ゴール2の到達後。ステージ2は最初から） */
+  mouseUnlocked() {
+    const m = this.def.mouse;
+    if (!m) return false;
+    const n = m.afterCheckpoint || 0;
+    return !n || (this.checkpoints[n - 1] && this.checkpoints[n - 1].done);
+  }
+  /** 脅威の予告：自動事故防止チーム（進化）なら先回りして危険区間をストッパーで隔離する */
+  onThreatWarn(th, slot) {
+    if (th instanceof Mouse && th.tutorial) this.setHint('🐭 ネズミがドミノを狙っている！ 倒れ始めたら、連鎖の先のドミノを1枚つかんで抜こう', 14);
+    if (!slot || !slot.seg || !slot.seg.slots || !(this.evolved('autoSafety') || this.evolved('stopperHQ'))) return;
+    const seg = slot.seg, i = slot.i;
+    let n = 0;
+    for (const k of [4, -5]) {
+      const a = seg.slots[i + k], b = seg.slots[i + k + 1];
+      if (a && b && a.domino && b.domino && this.throwStopper(a, b, '先回りで隔離！')) n++;
+    }
+    if (n) { this.stats.predictiveIsolations = (this.stats.predictiveIsolations || 0) + 1; this.fx.floatAt(tmp.set(slot.x, 2.6, slot.z), '🚨 自動事故防止チーム：危険区間を隔離', 'coin', 2); }
+  }
+  onThreatHit(th, slot) {
+    this.lastThreatHit = { t: this.time, x: slot.x, z: slot.z };
+    if (th instanceof Mouse && th.tutorial && !this.flags.mouseTutorialDone) {
+      this.flags.mouseTutorialDone = true;
+      this.tutorialPending = this.time;
+      this.setHint('⚠ 事故だ！ 連鎖の先のドミノを1枚つかんで抜くと止まる！', 10);
+    }
+  }
+  setHint(text, sec) { this.hint = { text, until: this.time + sec }; }
+  /** 手で抜いて事故を止めたか（倒れ始めて数秒以内に、近くの立っているドミノをつかんだ） */
+  onHandGrab(d) {
+    const t = d.body.translation();
+    const recent = [...this.dominoes.list].some((o) => o.accident && o.toppledAt > this.dominoes.time - 3 && (o.body.translation().x - t.x) ** 2 + (o.body.translation().z - t.z) ** 2 < 10 * 10);
+    if (recent) { this.stats.manualSaves = (this.stats.manualSaves || 0) + 1; this.fx.floatAt(tmp.set(t.x, 2, t.z), '✋ 抜いた！ ここで止まれ〜！', 'coin', 1.6); this.audio.pick && this.audio.pick(); }
+  }
+  /** 防衛チュートリアル：事故が落ち着いたらストッパーズの確定ガチャ */
+  updateTutorial() {
+    if (this.tutorialPending == null || this.mode !== 'build') return;
+    const busy = [...this.dominoes.list].some((o) => o.accident && o.toppledAt > this.dominoes.time - 2.5);
+    if (busy || this.time - this.tutorialPending < 4) return;
+    this.tutorialPending = null;
+    if (this.level('stopperCrew') > 0) return;
+    this.progress.tickets.push({ source: 'tutorial', label: '🦺 防衛チュートリアル：ストッパーズ出動要請', category: 'defense', force: ['stopperCrew'], choices: 3, ignoreLevel: true });
+    this.setHint('🦺 ストッパーズを呼ぼう！ 次の事故からは自動でストッパーを置いてくれる', 12);
+    this.emit('tutorialGacha');
   }
 
   unloadStage() {
     if (!this.stageId) return;
+    for (const m of this.campMeshes || []) this.scene.remove(m);
+    if (this.shelf) this.shelf.dispose();
+    for (const th of this.threats || []) th.dispose();
+    this.threats = [];
     this.workers.clear();
     this.dominoes.clear();
     this.scene.remove(this.dominoes.mesh);
@@ -208,6 +274,7 @@ export class Game {
     // 自動遮断ゲート／本部ならストッパーがゲートになる
     const gates = this.level('gate') > 0 || this.evolved('stopperHQ');
     for (const s of this.stoppers) if (s.gate !== gates) s.setGate(gates);
+    if (this.shelf) this.shelf.sync(this);
     this.workers.refreshLooks();
   }
 
@@ -226,7 +293,7 @@ export class Game {
       stopperHQ: () => this.hq && this.hq.position.clone(), massBuild: () => firstOf('builder'), autoSafety: () => firstOf('stopperCrew'),
       piggy: () => this.piggy && this.piggy.mesh.position.clone(),
     };
-    this.lastSpawnTarget = T[id] ? T[id]() : null;
+    this.lastSpawnTarget = T[id] ? T[id]() : this.shelf && SMALL_PARTS.includes(id) ? this.shelf.posOf(id) : null;
     if (p.evo) { this.workers.list.forEach((w) => { if (Math.random() < 0.7) w.act(1.6, 'cheer', () => w.think()); }); }
     this.emit('pick', res);
     return res;
@@ -279,6 +346,7 @@ export class Game {
       for (let d = 0; d < 40 && idx < 0; d++) for (const c of [def.at + d, def.at - d]) if (idx < 0 && straight(c)) idx = c;
       if (idx < 0) idx = def.at;
       const sl = slots[idx];
+      if (!sl) { console.warn('checkpoint beyond course', def.at, slots.length); return; }
       let side = 1;
       for (const sd of [1, -1]) {
         const nx = Math.cos(sl.yaw), nz = -Math.sin(sl.yaw);
@@ -420,6 +488,35 @@ export class Game {
     return true;
   }
 
+  /**
+   * 手で置いたドミノ：空いた設計図のマスの上で、まっすぐ立って止まったらそのマスのドミノとして扱う
+   * （位置や向きの補正はしない。立ち方が悪ければ数えられない）
+   */
+  adoptLoose() {
+    for (const d of this.dominoes.list) {
+      if (d.slot || d.held || d.removed || d.toppled) continue;
+      if (!d.body.isSleeping() && !this.isStill(d)) continue;
+      if (this.dominoes.upY(d) < 0.97) continue;
+      const t = d.body.translation();
+      const sl = this.nearestSlot(t.x, t.z, 0.2);
+      if (!sl || sl.domino) continue;
+      const r = d.body.rotation();
+      const yaw = Math.atan2(2 * (r.w * r.y + r.x * r.z), 1 - 2 * (r.y * r.y + r.x * r.x));
+      if (Math.abs(Math.sin(yaw - sl.yaw)) > 0.26) continue; // 向きが15°以上ずれていたら連鎖しにくいので数えない
+      sl.domino = d; d.slot = sl; d.standing = true; this.unbuiltDirty = true;
+      this.stats.handPlaced = (this.stats.handPlaced || 0) + 1;
+      this.fx.floatAt(tmp.set(t.x, 1.4, t.z), '✓', 'coin', 0.6);
+      this.audio.click(1.2, Math.max(0, sl.order));
+    }
+  }
+
+  /** 役割の待機所 */
+  campPos(role) {
+    const k = ROLE_CAMP[role];
+    const c = k && this.def.camps && this.def.camps[k];
+    return c ? new THREE.Vector3(c.x, 0, c.z) : null;
+  }
+
   /** ほぼ止まっているか（スリープしない寄りかかりも含む） */
   isStill(d) {
     if (d.frozen || !d.body || d.body.isSleeping()) return true;
@@ -439,7 +536,7 @@ export class Game {
     for (const e of this.dominoes.list) if (e.slot && !e.removed && (e.toppled || !this.dominoes.isStandingAt(e, e.slot))) { const t = e.body.translation(); lying.push({ e, x: t.x, z: t.z, o: this.ord(e.slot) }); }
     const covered = (d) => { const o = this.ord(d.slot); for (const l of lying) if (l.e !== d && l.o < o && (l.x - d.slot.x) ** 2 + (l.z - d.slot.z) ** 2 < 0.36) return true; return false; };
     for (const d of this.dominoes.list) {
-      if (!d.slot || d.claim || d.removed) continue;
+      if (!d.slot || d.claim || d.removed || d.held) continue;
       // 倒れた・寄りかかって傾いた・ずれたドミノ（スロットにきちんと立っていない）
       if (!d.toppled && this.dominoes.isStandingAt(d, d.slot)) continue;
       if (covered(d)) continue;
@@ -486,7 +583,8 @@ export class Game {
     if (this.mode !== 'build') return null;
     let best = null, bd = Infinity;
     for (const d of this.dominoes.list) {
-      if (d.claim || d.removed) continue;
+      if (d.claim || d.removed || d.held) continue;
+      if (!d.slot && d.releasedAt != null && this.time - d.releasedAt < 12) continue; // プレイヤーが置いたばかりのものは片付けない
       let loose = !d.slot;
       if (d.slot && !this.dominoes.isStandingAt(d, d.slot) && this.isStill(d)) {
         const t = d.body.translation();
@@ -857,6 +955,9 @@ export class Game {
     this.stock += n - show;
     this.fx.floatAt(tmp.set(dock.x, 3, dock.z + 4), `ゴミ捨て場にドミノ ${n}個`, '', 2);
   }
+  onRoombaWarn(r) { this.audio.roombaWarn(); this.fx.floatAt(r.pos.clone().setY(3.2), '🤖 ルンバ出動まで 3…2…1', 'warn', 2.6); }
+  onRoombaReturn(r) { this.fx.floatAt(r.pos.clone().setY(3.2), '🤖 お掃除おわり。充電台へ帰ります', '', 2.0); }
+  onRoombaDock(r) { this.audio.roombaDock(); this.fx.floatAt(r.pos.clone().setY(3), '🔋 充電中', '', 1.6); }
   onRoombaDepart(r) {
     this.audio.roombaStart();
     this.fx.floatAt(r.pos.clone().setY(3.5), `ルンバ出動！（${r.pattern.name}）`, 'warn', 2.2);
@@ -1262,6 +1363,7 @@ export class Game {
   update(dt) {
     this.time += dt;
     this.physics.update(dt);
+    if (this.mode === 'build' && (this._adoptT = (this._adoptT || 0) - dt) <= 0) { this._adoptT = 0.3; this.adoptLoose(); }
     this.dominoes.update(dt);
     if (this.run) this.updateRun(dt);
     if (this.run && this.run.pendingCps.length) for (const cp of [...this.run.pendingCps]) this.onCheckpoint(cp);
@@ -1270,6 +1372,8 @@ export class Game {
     for (const cp of this.checkpoints) cp.update(dt);
     for (const s of this.stoppers) s.update(dt);
     if (this.roomba) this.roomba.update(dt, this);
+    for (const th of this.threats || []) th.update(dt);
+    this.updateTutorial();
     this.updateThrows(dt);
     this.updateAlarm(dt);
     this.workers.update(dt);
@@ -1343,7 +1447,7 @@ export class Game {
       else { const t = s.domino.body.translation(), r = s.domino.body.rotation(); built.push([slotKey(s), 2, +t.x.toFixed(2), +t.y.toFixed(3), +t.z.toFixed(2), +r.x.toFixed(3), +r.y.toFixed(3), +r.z.toFixed(3), +r.w.toFixed(3)]); }
     }
     const loose = [];
-    for (const d of this.dominoes.list) if (!d.slot) { const t = d.body.translation(); loose.push([+t.x.toFixed(2), +t.z.toFixed(2)]); }
+    for (const d of this.dominoes.list) if (!d.slot) { const t = d.body.translation(), r = d.body.rotation(); loose.push([+t.x.toFixed(2), +t.z.toFixed(2), +t.y.toFixed(3), +r.x.toFixed(4), +r.y.toFixed(4), +r.z.toFixed(4), +r.w.toFixed(4)]); }
     return {
       course: this.course.serialize(),
       pieces: this.pieces.map((p) => ({ id: p.id, type: p.type, x: p.x, z: p.z, yaw: p.yaw })),
@@ -1351,6 +1455,7 @@ export class Game {
       built, loose,
       stoppers: this.stoppers.map((s) => [slotKey(s.slot), slotKey(s.next), s.locked ? 1 : 0, s.emergency ? 1 : 0]),
       designed: true,
+      courseVer: this.def.courseVer || 1,
       checkpoints: this.checkpoints.map((c) => (c.done ? 1 : 0)),
       specials: this.specials.map((sp) => (sp.consumed ? 1 : 0)),
       markers: this.markers.map((m) => (m.consumed ? 1 : 0)),
@@ -1374,7 +1479,9 @@ export class Game {
     // v0.3：コースは CPU 設計の固定コース。v0.2 の自由設計コースは引き継げないので、
     // 置いてあったドミノは在庫に戻す（数は失わない）
     const designed = d.designed === true;
-    if (!designed) { d = { ...d, stock: (d.stock || 0) + (d.built || []).length + (d.loose || []).length, built: [], loose: [], stoppers: [], placed: [] }; }
+    // v0.4：ステージ1の設計図が長くなった。古い設計図のデータは配置を在庫に戻し、中間ゴールの記録も新しいコースに合わせて初期化
+    const sameCourse = designed && (d.courseVer || 1) === (this.def.courseVer || 1);
+    if (!sameCourse) { d = { ...d, stock: (d.stock || 0) + (d.built || []).length + (d.loose || []).length, built: [], loose: [], stoppers: [], placed: designed ? d.placed : [], checkpoints: [], specials: [] }; }
     (d.checkpoints || []).forEach((v, i) => { if (this.checkpoints[i] && v) this.checkpoints[i].done = true; });
     (d.specials || []).forEach((v, i) => { if (this.specials[i] && v) this.specials[i].consumed = true; });
     (d.markers || []).forEach((v, i) => { const m = this.markers[i]; if (m && v) { m.consumed = true; if (m.mesh) this.scene.remove(m.mesh); } });
@@ -1393,7 +1500,15 @@ export class Game {
       else s.domino = this.dominoes.create({ x: b[2], y: b[3], z: b[4] }, { slot: s, kind, quat: { x: b[5], y: b[6], z: b[7], w: b[8] }, frozen: true });
       used++;
     }
-    for (const [x, z] of d.loose || []) { this.dominoes.create({ x, y: 0, z, yaw: Math.random() * 6 }, { lying: true, frozen: true }); used++; }
+    for (const [x, z, y, qx, qy, qz, qw] of d.loose || []) {
+      // 手で置いたドミノ：姿勢ごと復元（立っていれば立ったまま）。古い形式は寝かせて置く
+      if (qw !== undefined) {
+        const up = 1 - 2 * (qx * qx + qz * qz);
+        const nd = this.dominoes.create({ x, y, z }, { quat: { x: qx, y: qy, z: qz, w: qw }, frozen: up < 0.9 });
+        if (nd && up >= 0.9) { nd.toppled = false; nd.standing = true; nd.body.sleep(); nd.releasedAt = this.time; }
+      } else this.dominoes.create({ x, y: 0, z, yaw: Math.random() * 6 }, { lying: true, frozen: true });
+      used++;
+    }
     for (const p of d.placed || []) this.placePiece(p.type, p.x, p.z, p.yaw, true) || null;
     for (const st of d.stoppers || []) {
       const a = byKey.get(st[0]), b = byKey.get(st[1]);

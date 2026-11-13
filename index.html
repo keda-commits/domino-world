@@ -37,16 +37,16 @@
         <button data-view="overview" title="部屋全体 (O)">俯瞰</button>
         <button id="b-cam-reset" title="カメラを戻す (Home)">⟲</button>
       </div>
-      <button id="b-autocam" class="on" title="連鎖中の自動カメラ">🎬</button>
       <div class="seg"><button data-speed="1" class="on">1×</button><button data-speed="2">2×</button><button data-speed="4">4×</button></div>
       <button id="b-pause" title="一時停止 (P)">⏸</button>
       <button id="b-menu" title="メニュー（記録・ビルド・人員・設定）">≡</button>
     </div>
 
-    <div id="autocam-chip" class="chip hidden">自動カメラ一時停止中（🎬で再開）</div>
 
     <!-- 連鎖中 -->
-    <div id="runhud" class="hidden"><span id="rh-count">0</span><small>連鎖</small><div id="rh-piggy" class="hidden">🐷 <b>0</b></div></div>
+    <div id="runhud" class="hidden"><span id="rh-count">0</span><small>連鎖</small><div id="rh-prog"><i></i><b></b></div><div id="rh-rec" class="hidden">NEW RECORD！</div><div id="rh-piggy" class="hidden">🐷 <b>0</b></div></div>
+    <div id="run-view" class="hidden"><button data-rv="chase" class="on">🎥 連鎖追跡</button><button data-rv="overview">🗺 俯瞰</button></div>
+    <div id="hover-tip" class="hidden"></div>
 
     <!-- 下：建設状況と操作 -->
     <div id="bottom" class="hud">
@@ -57,7 +57,7 @@
       </div>
       <div class="bt-row">
         <div class="tools">
-          <button data-tool="play" class="tool on" title="クリックで設計図の先頭にドミノを置く／倒れたドミノを起こす (1)">🖐<span>置く</span></button>
+          <button data-tool="play" class="tool on" title="ドラッグでドミノをつかむ・離して置く・投げる／ダブルクリックでデコピン (1)">🖐<span>手</span></button>
           <button data-tool="pieces" class="tool" id="b-pieces" title="ベル・バリケード・センサーを置く (2)">🧩<span>配置</span></button>
           <button data-tool="test" class="tool" title="区間テスト (3)">🧪<span>試し倒し</span></button>
           <button data-tool="stopper" class="tool" title="ストッパーのロック切替 (4)">🔒<span>ロック</span></button>

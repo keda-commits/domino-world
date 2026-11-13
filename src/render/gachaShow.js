@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { gachaStage } from '../world/camps.js';
 import { PARTS, EVOLUTIONS, RARITY, CATEGORY } from '../data/parts.js';
 import { buildGnome } from '../actors/gnomeModel.js';
 import { MAT, rbox, shadow } from '../world/props.js';
@@ -173,6 +174,7 @@ export class GachaShow {
     this.spot = new THREE.Vector3(spot.x, 0, spot.z);
     this.yaw = spot.yaw || 0;
     this.machine = gachaMachineModel();
+    this.machine.add(gachaStage()); // 展示スペースのマットと柵
     this.machine.position.copy(this.spot);
     this.machine.rotation.y = this.yaw;
     this.scene.add(this.machine);
@@ -441,7 +443,7 @@ export class GachaShow {
     this.deliverTime = 1.0;
     if (spawned.length) {
       // 新しい人：箱から飛び出して現場へ走っていく
-      for (const w of spawned) { w.pos.copy(where).add(new THREE.Vector3((Math.random() - 0.5) * 0.6, 0, 0.8)); w.act(0.9, 'cheer', () => w.think()); }
+      for (const w of spawned) { w.pos.copy(where).add(new THREE.Vector3((Math.random() - 0.5) * 0.6, 0, 0.8)); w.act(0.9, 'cheer', () => w.goHome()); }
       this.deliverTime = 1.3;
     } else if (g.lastSpawnTarget) {
       // 設備：現場の場所をカメラで見せる

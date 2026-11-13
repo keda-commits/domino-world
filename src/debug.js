@@ -83,6 +83,7 @@ export function installDebug(ctx) {
      */
     botPlay: (sec, opts = {}) => {
       const g = game, log = [], dt = 1 / 20, t0 = g.time;
+      g._botMode = true;
       const prio = opts.prio || ['builder', 'collector', 'restorer', 'stopperCrew', 'carrier', 'machine', 'boots', 'basket', 'factory', 'train', 'bell', 'barricade', 'watchtower', 'guard', 'gate', 'sensor', 'level', 'magnet', 'clover', 'branch'];
       let placeAcc = 0, lastRunAt = -99, runs = 0;
       const note = (s) => log.push(`${Math.round(g.time - t0)}s Lv${g.progress.level} ${s}`);
@@ -128,7 +129,7 @@ export function installDebug(ctx) {
       while (g.time - t0 < sec) {
         g.update(dt);
         if (g.mode !== 'build') continue;
-        if ((defT -= dt) <= 0) { defT = 5; placeDefense(); }
+        if ((defT -= dt) <= 0) { defT = 5; placeDefense(); if (g.progress.tickets.length) pickGacha(); }
         // 手で置く（建設小人が少ないうち）・手で片付け（回収がいないうち）
         if (g.level('builder') < 2) { placeAcc += dt * 2.5; while (placeAcc >= 1) { placeAcc -= 1; g.manualPlace(); } }
         if (g.level('collector') + g.level('restorer') === 0) { for (let i = 0; i < 2; i++) g.manualRestoreStep(); }
@@ -154,6 +155,7 @@ export function installDebug(ctx) {
           if (r.cleared) break;
         }
       }
+      g._botMode = false;
       return { log, time: Math.round(g.time - t0), level: g.progress.level, parts: { ...g.progress.parts }, evo: { ...g.progress.evolutions }, best: g.records[g.stageId].best, cleared: g.records[g.stageId].cleared, runs };
     },
     wipe: () => ctx.reset(),
