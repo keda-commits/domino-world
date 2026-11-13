@@ -12,6 +12,7 @@ import { Roomba } from '../world/roomba.js';
 import { GoalMachine } from '../world/goalMachine.js';
 import { Checkpoint } from '../world/checkpoints.js';
 import { Mouse, RollingBall } from '../world/threats.js';
+import { Grabbables, propEntry, carryEntry, addHitProxy } from './grabbables.js';
 import { campMarker, StorageShelf, ROLE_CAMP, SMALL_PARTS } from '../world/camps.js';
 import { Workers } from '../actors/workers.js';
 import { Depot, Crate, Machine, Train, Factory } from './facilities.js';
@@ -140,7 +141,72 @@ export class Game {
     this.threats = [];
     if (this.def.mouse) this.threats.push(new Mouse(this, this.def.mouse));
     if (this.def.ball) this.threats.push(new RollingBall(this, this.def.ball));
+    this.registerGrabbables();
+    if (data) this.applyGrabSave(data);
+    else if (this.crate.count === 0 && !this.def.noStartCrate) {
+      // ゲーム開始：建設開始地点近くの資材箱にドミノ50個（在庫から移すので二重計上しない）
+      const n = Math.min(50, this.stock); this.stock -= n; this.crate.count += n;
+    }
     this.emit('stageLoaded', id);
+  }
+
+  // ================= つかめるオブジェクト =================
+  registerGrabbables() {
+    const G = (this.grabbables = new Grabbables(this));
+    this.dynamicProps = new Set();
+    this.propEntries = (this.stage.props || []).map((p) => G.add(propEntry(this, p)));
+    const notRun = () => this.mode === 'build';
+    // 資材箱：中のドミノは1枚ずつ取り出し、縁や旗をつかむと箱ごと運ぶ（運んだ場所に固定され、建設の先頭を追わなくなる）
+    this.crateEntry = G.add(carryEntry(this, { name: '前線の資材箱', kind: 'facility', obj: this.crate.group, radius: 1.5, height: 1.0, canGrab: notRun,
+      getPos: () => this.crate.pos.clone(), setPos: (v) => this.crate.pos.copy(v),
+      onGrab: () => { this.crate.carried = true; this.crate.pinned = true; }, onDrop: () => { this.crate.carried = false; } }));
+    G.add(carryEntry(this, { name: 'ドミノ自動設置機', kind: 'facility', obj: this.machine.group, radius: 1.6, height: 2.6, canGrab: () => notRun() && this.level('machine') > 0,
+      getPos: () => this.machine.pos.clone(), setPos: (v) => this.machine.pos.copy(v), onGrab: () => { this.machine.carried = true; }, onDrop: () => { this.machine.carried = false; } }));
+    G.add(carryEntry(this, { name: '資材運搬トレイン', kind: 'facility', obj: this.train.mesh, radius: 1.6, height: 1.6, canGrab: () => notRun() && this.level('train') > 0,
+      getPos: () => this.train.pos.clone(), setPos: (v) => this.train.pos.copy(v), onGrab: () => { this.train.carried = true; }, onDrop: () => { this.train.carried = false; } }));
+    this.factoryEntry = G.add(carryEntry(this, { name: 'ドミノ製造機', kind: 'facility', obj: this.factory.group, radius: 2.6, height: 3.6, canGrab: notRun,
+      getPos: () => this.factory.group.position.clone(), setPos: (v) => this.factory.group.position.copy(v) }));
+    for (const w of this.workers.list) this.addWorkerGrab(w);
+    for (const p of this.placed) this.addPieceGrab(p);
+    for (const th of this.threats) {
+      if (th instanceof Mouse && !th.hitProxy) th.hitProxy = addHitProxy(th.group, 0.7, 0.9);
+      if (th instanceof Mouse) G.add(carryEntry(this, { name: 'いたずらネズミ', kind: 'threat', obj: th.group, radius: 0.5, height: 0.8, canGrab: () => notRun() && th.state !== 'den',
+        getPos: () => th.pos.clone(), setPos: (v) => th.pos.copy(v), onGrab: () => { th.held = true; this.fx.floatAt(th.pos.clone().setY(1.6), 'チュ〜！？', 'warn', 1); }, onDrop: () => { th.held = false; th.startReturn(); } }));
+      if (th instanceof RollingBall) G.add({ name: 'ゴムボール', kind: 'threat', obj: th.group, mode: 'body', body: th.body, radius: th.r, height: th.r * 2, canGrab: notRun, getPos: () => th.pos.setY(0), onGrab: () => { th.state = 'rest'; }, onDrop: () => {} });
+    }
+    if (this.piggy) this.addPiggyGrab();
+  }
+  addWorkerGrab(w) {
+    if (!this.grabbables) return;
+    if (!w.hitProxy) w.hitProxy = addHitProxy(w.root, 0.5, 1.4);
+    w.grabEntry = this.grabbables.add(carryEntry(this, { name: '人', kind: 'worker', obj: w.root, radius: 0.4, height: 1.3, canGrab: () => this.mode === 'build',
+      getPos: () => w.pos.clone(), setPos: (v) => w.pos.copy(v), onGrab: () => w.grabbed(), onDrop: (p, sp) => w.dropped(sp) }));
+  }
+  addPieceGrab(p) {
+    if (!this.grabbables) return;
+    const names = { barricade: 'バリケード', bell: '特殊ベル', sensor: '接近センサー' };
+    p.grabEntry = this.grabbables.add(carryEntry(this, { name: names[p.type] || p.type, kind: 'piece', obj: p.mesh, radius: p.type === 'barricade' ? 2.2 : 0.8, height: 1.2, canGrab: () => this.mode === 'build',
+      getPos: () => p.mesh.position.clone(), setPos: (v) => p.mesh.position.copy(v), onDrop: (pos) => { p.x = pos.x; p.z = pos.z; this.refreshCourse(); } }));
+  }
+  addPiggyGrab() {
+    const pg = this.piggy;
+    if (!this.grabbables || pg.grabEntry) return;
+    pg.grabEntry = this.grabbables.add(carryEntry(this, { name: '欲張り貯金箱', kind: 'facility', obj: pg.mesh, radius: 1.4, height: 1.6, canGrab: () => this.mode === 'build' }));
+  }
+  /** 小物・資材箱・製造機の位置と、資材箱の中身を保存 */
+  serializeGrab() {
+    return {
+      props: (this.propEntries || []).map((e) => e.serialize()),
+      crate: { n: this.crate.count, x: +this.crate.pos.x.toFixed(2), z: +this.crate.pos.z.toFixed(2), pinned: !!this.crate.pinned },
+      factory: [+this.factory.group.position.x.toFixed(2), +this.factory.group.position.z.toFixed(2)],
+    };
+  }
+  applyGrabSave(d) {
+    const moved = d.grab;
+    if (!moved) return;
+    (moved.props || []).forEach((v, i) => { const e = this.propEntries[i]; if (!e || !v) return; const o = e.getPos(); if (Math.abs(o.x - v[0]) > 0.05 || Math.abs(o.z - v[1]) > 0.05 || Math.abs((e.obj.rotation.y || 0) - (v[2] || 0)) > 0.01) e.restore(v); });
+    if (moved.crate) { this.crate.count = moved.crate.n; if (moved.crate.pinned) { this.crate.pos.set(moved.crate.x, 0, moved.crate.z); this.crate.pinned = true; } }
+    if (moved.factory) this.factory.group.position.set(moved.factory[0], 0, moved.factory[1]);
   }
 
   // ================= 小さな脅威と防衛チュートリアル =================
@@ -269,6 +335,7 @@ export class Game {
       const p = { x: s.x + Math.cos(s.yaw) * 3.2, z: s.z - Math.sin(s.yaw) * 3.2 };
       const m = piggyMesh(); m.position.set(p.x, 0, p.z); m.rotation.y = s.yaw; this.scene.add(m);
       this.piggy = { mesh: m, bank: 0 };
+      this.addPiggyGrab();
       this.stage.obstacles.push({ x: p.x, z: p.z, r: 1.8, roomba: true, build: true });
     }
     // 自動遮断ゲート／本部ならストッパーがゲートになる
@@ -498,7 +565,7 @@ export class Game {
       if (!d.body.isSleeping() && !this.isStill(d)) continue;
       if (this.dominoes.upY(d) < 0.97) continue;
       const t = d.body.translation();
-      const sl = this.nearestSlot(t.x, t.z, 0.2);
+      const sl = this.nearestSlot(t.x, t.z, 0.26);
       if (!sl || sl.domino) continue;
       const r = d.body.rotation();
       const yaw = Math.atan2(2 * (r.w * r.y + r.x * r.z), 1 - 2 * (r.y * r.y + r.x * r.x));
@@ -725,12 +792,13 @@ export class Game {
     this.scene.add(mesh);
     const p = { type, x, z, yaw, mesh, slot: null };
     this.placed.push(p);
+    this.addPieceGrab(p);
     this.refreshCourse();
     if (!quiet) this.audio.buy();
     return p;
   }
   removePieceAt(x, z) {
-    for (const p of this.placed) if ((p.x - x) ** 2 + (p.z - z) ** 2 < 2.5 * 2.5) { this.scene.remove(p.mesh); this.placed.splice(this.placed.indexOf(p), 1); this.refreshCourse(); return true; }
+    for (const p of this.placed) if ((p.x - x) ** 2 + (p.z - z) ** 2 < 2.5 * 2.5) { this.scene.remove(p.mesh); this.placed.splice(this.placed.indexOf(p), 1); if (p.grabEntry) this.grabbables.remove(p.grabEntry); this.refreshCourse(); return true; }
     for (const p of this.pieces) {
       const f = p.footprint; const c = Math.cos(-f.yaw), s = Math.sin(-f.yaw), dx = x - f.x, dz = z - f.z;
       if (Math.abs(dx * c + dz * s) < f.hw + 1 && Math.abs(-dx * s + dz * c) < f.hd + 1) {
@@ -1378,9 +1446,10 @@ export class Game {
     this.updateAlarm(dt);
     this.workers.update(dt);
     this.crate.update(dt);
-    this.machine.update(dt);
-    this.train.update(dt);
+    if (!this.machine.carried) this.machine.update(dt);
+    if (!this.train.carried) this.train.update(dt);
     this.factory.update(dt);
+    for (const e of this.dynamicProps || []) e.sync();
     this.planView.update(dt, this);
     // 予約の掃除：持ち主が仕事をしていない予約を解放（進行不能の防止）
     if ((this.claimT = (this.claimT || 0) - dt) <= 0) {
@@ -1462,7 +1531,9 @@ export class Game {
       chests: this.chests.map((c) => (c.opened ? 1 : 0)),
       gachaUsed: this.gachaMachine.used,
       finalChest: this.finalChest.opened,
-      stock: this.stock + this.crate.count + this.machine.hopper + this.workers.inHands() + this.train.load + (this.roomba ? this.roomba.bin : 0),
+      // 在庫（資材箱の中身は grab.crate に別に保存。二重計上しない）
+      stock: this.stock + this.machine.hopper + this.workers.inHands() + this.train.load + (this.roomba ? this.roomba.bin : 0),
+      grab: this.serializeGrab(),
       pieceSeq: this.pieceSeq || 0,
     };
   }

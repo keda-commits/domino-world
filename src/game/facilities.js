@@ -55,7 +55,8 @@ export class Crate {
     const g = this.game;
     this.cap = 60 + 30 * g.level('basket') + (g.level('train') ? 60 : 0);
     const front = g.frontSlot();
-    if (front) {
+    // プレイヤーが運んで置いたら、その場所に固定（建設の先頭を追わない）
+    if (front && !this.pinned && !this.carried) {
       const tgt = g.sideOf(front, 3.2, this._v);
       // 置けない場所なら反対側
       if (g.stage.blocked(tgt.x, tgt.z, 1.4) || !g.stage.inBounds(tgt.x, tgt.z, 1.2)) g.sideOf(front, -3.2, tgt);
@@ -67,7 +68,7 @@ export class Crate {
         if (d < 0.1) this.moving = false;
       }
     }
-    this.pos.y = g.stage.heightAt(this.pos.x, this.pos.z);
+    if (!this.carried) this.pos.y = g.stage.heightAt(this.pos.x, this.pos.z);
     const show = Math.min(24, Math.ceil(this.count / Math.max(1, this.cap / 24)));
     for (let i = 0; i < 24; i++) this.minis[i].visible = i < show;
   }

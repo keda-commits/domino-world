@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { R } from '../core/physics.js';
 import { CFG } from '../config.js';
+import { makeCarryCollider } from './grabbables.js';
 
 /**
  * プレイヤーの「手」（Ver.0.4）
@@ -29,7 +30,157 @@ export class Hand {
     // 持っているドミノの真下の影マーカー（高さが分かるように）
     this.shadowMark = new THREE.Mesh(new THREE.CircleGeometry(0.22, 20), new THREE.MeshBasicMaterial({ color: '#000', transparent: true, opacity: 0.25, depthWrite: false }));
     this.shadowMark.rotation.x = -Math.PI / 2; this.shadowMark.visible = false; scene.add(this.shadowMark);
+    // つかめるものにカーソルを合わせたときの目印（足元の輪）
+    this.hoverRing = new THREE.Mesh(new THREE.RingGeometry(0.86, 1, 40), new THREE.MeshBasicMaterial({ color: '#ffe066', transparent: true, opacity: 0.85, depthWrite: false }));
+    this.hoverRing.rotation.x = -Math.PI / 2; this.hoverRing.visible = false; this.hoverRing.renderOrder = 5; scene.add(this.hoverRing);
+    this.heldObj = null; // ドミノ以外のつかんでいるもの
+    this.falling = []; // 離して落下中の carry オブジェクト
   }
+
+  // ================= ドミノ以外のつかめるもの =================
+  /** カーソルの下で一番手前の「つかめるもの」：ドミノ・資材（1枚取り出す）・小物/人/設備 */
+  pickAny(ray) {
+    const g = this.game;
+    const c = [];
+    const dh = this.pickDomino(ray);
+    if (dh) c.push({ type: 'domino', d: dh.d, point: dh.point, dist: ray.ray.origin.distanceTo(dh.point) });
+    const eh = g.grabbables ? g.grabbables.pick(ray) : null;
+    if (eh) {
+      // 資材箱の中のドミノ（見えている小さなドミノ）をつかんだら1枚取り出す。縁・旗なら箱ごと運ぶ
+      if (eh.entry === g.crateEntry && g.crate.minis.includes(eh.object) && g.crate.count > 0) c.push({ type: 'supply', supply: 'crate', point: eh.point, dist: eh.dist });
+      else c.push({ type: 'entry', entry: eh.entry, point: eh.point, dist: eh.dist });
+    }
+    const dep = g.depots.map((d) => d.mesh);
+    const hd = ray.intersectObjects(dep, true).find((x) => x.object.visible);
+    if (hd) c.push({ type: 'supply', supply: g.stock > 0 ? 'depot' : 'empty', point: hd.point, dist: hd.distance });
+    if (!c.length) return null;
+    c.sort((a, b) => a.dist - b.dist);
+    // ドミノは小さいので少しだけ優先（ほぼ同じ距離なら後ろのものよりドミノ）
+    const d = c.find((x) => x.type === 'domino');
+    return d && d.dist <= c[0].dist + 0.3 ? d : c[0];
+  }
+  /** カーソルを合わせたものの足元に輪を出す（つかめる目印） */
+  highlight(h) {
+    if (!h) { this.hoverRing.visible = false; return; }
+    let p, r;
+    if (h.type === 'domino') { const t = h.d.body.translation(); p = this._v.set(t.x, 0, t.z); r = 0.55; }
+    else if (h.type === 'entry') { p = h.entry.getPos(); r = Math.max(0.5, h.entry.radius * 1.1); }
+    else { p = this._v.copy(h.point); r = 0.6; }
+    this.hoverRing.position.set(p.x, this.game.stage.heightAt(p.x, p.z) + 0.03, p.z);
+    this.hoverRing.scale.setScalar(r);
+    this.hoverRing.material.opacity = 0.55 + Math.sin(performance.now() * 0.01) * 0.3;
+    this.hoverRing.visible = true;
+  }
+
+  /** 小物・人・設備をつかむ */
+  grabEntry(e, point) {
+    const g = this.game;
+    if (this.held) this.release();
+    if (this.heldObj) this.releaseObj();
+    this.falling = this.falling.filter((f) => { if (f.entry === e) { if (f.collider) f.collider.dispose(); return false; } return true; });
+    if (e.onGrab) e.onGrab();
+    const base = e.getPos();
+    const h = { entry: e, lift: e.mode === 'body' ? 0.5 : 0.9, grabOff: point ? Math.max(0, Math.min(e.height, point.y - base.y)) : 0 };
+    if (e.mode === 'body') {
+      const b = e.body;
+      b.setGravityScale(0, true); b.wakeUp();
+      h.hh = e.hh != null ? e.hh : e.radius;
+      const r = b.rotation(); this._q.set(r.x, r.y, r.z, r.w); this._e.setFromQuaternion(this._q, 'YXZ'); h.yaw = this._e.y;
+      const t = b.translation(); this.target.set(t.x, t.y, t.z);
+    } else {
+      h.pos = base.clone(); h.vel = new THREE.Vector3(); h.yaw = e.obj.rotation.y;
+      h.collider = makeCarryCollider(g, e);
+      this.target.copy(base);
+    }
+    this.heldObj = h;
+    if (g.audio.pick) g.audio.pick();
+    g.stats.objGrabs = (g.stats.objGrabs || 0) + 1;
+    return e;
+  }
+  /** 離す：剛体はその速度のまま物理に、carry は落下させる */
+  releaseObj() {
+    const h = this.heldObj;
+    if (!h) return null;
+    this.heldObj = null;
+    this.shadowMark.visible = false;
+    const e = h.entry;
+    if (e.mode === 'body') {
+      const b = e.body;
+      b.setGravityScale(1, true);
+      const lv = b.linvel(); const v = this._v.set(lv.x, lv.y, lv.z);
+      const sp = v.length();
+      if (sp < 1.2) v.multiplyScalar(0.15); else if (sp > 18) v.setLength(18);
+      b.setLinvel(v, true);
+      if (e.onDrop) e.onDrop(e.getPos(), sp);
+      return { entry: e, speed: sp };
+    }
+    const sp = h.vel.length();
+    if (sp > 15) h.vel.setLength(15);
+    if (sp < 1.2) h.vel.set(0, 0, 0);
+    if (e.kind === 'worker') { const w = this.game.workers.list.find((x) => x.root === e.obj); if (w) w.state = 'falling'; }
+    this.falling.push({ entry: e, pos: h.pos.clone(), vel: h.vel.clone(), collider: h.collider, speed: sp });
+    return { entry: e, speed: sp };
+  }
+  /** carry オブジェクトの追従と落下 */
+  updateObjects(dt) {
+    const g = this.game, h = this.heldObj;
+    if (h && this.cursorRay) {
+      const e = h.entry;
+      const floorY = g.stage.heightAt(this.target.x, this.target.z);
+      const baseY = floorY + h.lift;
+      const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -(baseY + (e.mode === 'body' ? h.hh : 0) + h.grabOff * 0.5));
+      const p = this.cursorRay.ray.intersectPlane(plane, this._v);
+      if (p) {
+        const b = g.stage.bounds, m = Math.max(0.4, e.radius * 0.6);
+        this.target.set(Math.max(b.minX + m, Math.min(b.maxX - m, p.x)), baseY, Math.max(b.minZ + m, Math.min(b.maxZ - m, p.z)));
+      }
+      if (e.mode === 'carry') {
+        const prev = h.pos.clone();
+        h.pos.lerp(this.target, Math.min(1, dt * 14));
+        h.vel.lerp(this._v.copy(h.pos).sub(prev).divideScalar(Math.max(dt, 1e-3)), 0.5);
+        e.setPos(h.pos);
+        if (e.obj && h.yaw != null) e.obj.rotation.y = h.yaw;
+        h.collider.set(h.pos);
+      }
+      this.shadowMark.position.set(this.target.x, floorY + 0.015, this.target.z); this.shadowMark.scale.setScalar(Math.max(1, e.radius * 2)); this.shadowMark.visible = true;
+    }
+    // 落下中のもの：重力で落ち、床で少し跳ねて止まる
+    for (const f of [...this.falling]) {
+      f.vel.y -= 45 * dt;
+      f.pos.addScaledVector(f.vel, dt);
+      const b = g.stage.bounds, m = Math.max(0.4, f.entry.radius * 0.6);
+      if (f.pos.x < b.minX + m || f.pos.x > b.maxX - m) { f.vel.x *= -0.4; f.pos.x = Math.max(b.minX + m, Math.min(b.maxX - m, f.pos.x)); }
+      if (f.pos.z < b.minZ + m || f.pos.z > b.maxZ - m) { f.vel.z *= -0.4; f.pos.z = Math.max(b.minZ + m, Math.min(b.maxZ - m, f.pos.z)); }
+      const fy = g.stage.heightAt(f.pos.x, f.pos.z);
+      if (f.pos.y <= fy) {
+        f.pos.y = fy;
+        if (f.vel.y < -6) { f.vel.y *= -0.3; f.vel.x *= 0.6; f.vel.z *= 0.6; if (g.audio.drop) g.audio.drop(); }
+        else {
+          f.vel.multiplyScalar(Math.max(0, 1 - dt * 8)); f.vel.y = 0;
+          if (f.vel.lengthSq() < 0.05) {
+            f.entry.setPos(f.pos); if (f.collider) f.collider.dispose();
+            this.falling.splice(this.falling.indexOf(f), 1);
+            if (f.entry.onDrop) f.entry.onDrop(f.pos.clone(), f.speed);
+            continue;
+          }
+        }
+      }
+      f.entry.setPos(f.pos); if (f.collider) f.collider.set(f.pos);
+    }
+  }
+  /** 物理ステップごと：剛体の小物を目標へ（速度制御。ぬいぐるみ等は倒れないようヨーだけ回す） */
+  stepObject() {
+    const h = this.heldObj;
+    if (!h || h.entry.mode !== 'body') return;
+    const b = h.entry.body, t = b.translation();
+    const v = this._v.set(this.target.x - t.x, this.target.y + h.hh - t.y, this.target.z - t.z).multiplyScalar(12);
+    if (v.length() > 22) v.setLength(22);
+    b.setLinvel(v, true);
+    if (h.entry.kind === 'prop') { const r = b.rotation(); this._q.set(r.x, r.y, r.z, r.w); this._e.setFromQuaternion(this._q, 'YXZ'); let dy = h.yaw - this._e.y; dy = Math.atan2(Math.sin(dy), Math.cos(dy)); b.setAngvel({ x: 0, y: dy * 8, z: 0 }, true); }
+  }
+  get holdingAny() { return !!this.held || !!this.heldObj; }
+  releaseAny() { return this.held ? this.release() : this.releaseObj(); }
+
 
   get dominoes() { return this.game.dominoes; }
 
@@ -95,12 +246,13 @@ export class Hand {
 
   /** カーソルのレイ（毎フレーム main から） */
   setRay(ray) { this.ray.ray.copy(ray.ray); this.cursorRay = this.ray; }
-  adjustLift(dy) { if (this.held) this.held.lift = Math.max(0.02, Math.min(4, this.held.lift + dy)); }
-  rotate(dyaw) { if (this.held) this.held.yaw += dyaw; }
+  adjustLift(dy) { const h = this.held || this.heldObj; if (h) h.lift = Math.max(0.02, Math.min(5, h.lift + dy)); }
+  rotate(dyaw) { const h = this.held || this.heldObj; if (h) h.yaw = (h.yaw || 0) + dyaw; }
   tiltBy(dt) { if (this.held) this.held.tilt = Math.max(-1.4, Math.min(1.4, this.held.tilt + dt)); }
 
   /** 毎フレーム：目標位置とガイド */
   update(dt) {
+    this.updateObjects(dt);
     const h = this.held;
     if (h && h.d.removed) { this.held = null; }
     if (this.held && this.cursorRay) {
@@ -117,7 +269,7 @@ export class Hand {
         const sl = h.lift < 0.7 ? g.nearestSlot(x, z, SNAP_R) : null;
         h.guide = sl && !sl.domino ? sl : null;
         if (h.guide) {
-          const k = 0.35 * (1 - Math.hypot(x - sl.x, z - sl.z) / SNAP_R);
+          const k = 0.5 * (1 - Math.hypot(x - sl.x, z - sl.z) / SNAP_R);
           x += (sl.x - x) * k; z += (sl.z - z) * k;
           let dy = sl.yaw - h.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy));
           if (Math.abs(dy) > Math.PI / 2) dy = dy > 0 ? dy - Math.PI : dy + Math.PI; // 表裏どちら向きでもよい
@@ -134,6 +286,7 @@ export class Hand {
 
   /** 物理ステップごと：持っているドミノを目標へ（速度制御） */
   step(dt) {
+    this.stepObject();
     const h = this.held;
     if (!h || h.d.removed) return;
     const b = h.d.body, t = b.translation();
@@ -226,5 +379,5 @@ export class Hand {
 
   /** 今つかんでいるか */
   get holding() { return !!this.held; }
-  cancel() { if (this.held) this.release(); }
+  cancel() { if (this.held) this.release(); if (this.heldObj) this.releaseObj(); }
 }

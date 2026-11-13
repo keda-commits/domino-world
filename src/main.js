@@ -219,7 +219,7 @@ const hand = new Hand(game, scene, camera);
 game.hand = hand;
 function inputLocked() { return gacha.active || (game.run && game.run.kind === 'main') || ui.modalOpen; }
 function endInput() {
-  if (input.state === 'grabbing') hand.release();
+  if (input.state === 'grabbing') hand.releaseAny();
   if (input.state === 'panning') rig.panEnd();
   if (input.pointerId != null) { try { canvas.releasePointerCapture(input.pointerId); } catch { /* noop */ } }
   if (input.state === 'grabbing') ui.hideHover();
@@ -228,15 +228,11 @@ function endInput() {
   canvas.style.cursor = '';
 }
 /** 入力状態とキーをすべて破棄（フォーカス喪失・モード遷移など） */
-function resetAllInput() { endInput(); rig.clearInput(); tidyHeld = false; ui.hideHover(); }
-/** カーソルの下：ドミノ → 資材置き場 → 何もない */
+function resetAllInput() { endInput(); rig.clearInput(); tidyHeld = false; ui.hideHover(); hand.highlight(null); }
+/** カーソルの下のつかめるもの（ドミノ・資材・小物・人・設備）。何もなければ null */
 function hitTest(ev) {
   setNdc(ev); ray.setFromCamera(ndc, camera);
-  const dh = hand.pickDomino(ray);
-  const sh = hand.pickSupply(ray);
-  if (dh && (!sh || dh.point.distanceTo(camera.position) <= sh.point.distanceTo(camera.position) + 0.05)) return { kind: 'domino', d: dh.d, point: dh.point };
-  if (sh) return { kind: 'supply', supply: sh.kind, point: sh.point };
-  return null;
+  return hand.pickAny(ray);
 }
 
 // Alt＋左ドラッグの回転は OrbitControls より先に判定する（capture）
@@ -275,8 +271,9 @@ canvas.addEventListener('pointermove', (ev) => {
   setNdc(ev);
   if (input.state === 'pending' && Math.hypot(ev.clientX - input.x, ev.clientY - input.y) > DRAG_PX) {
     const h = input.hit;
-    if (h && h.kind === 'domino' && !h.d.removed) { hand.grab(h.d, h.point); input.state = 'grabbing'; }
-    else if (h && h.kind === 'supply' && h.supply !== 'empty' && hand.grabFromSupply(h.supply, h.point)) input.state = 'grabbing';
+    if (h && h.type === 'domino' && !h.d.removed) { hand.grab(h.d, h.point); input.state = 'grabbing'; }
+    else if (h && h.type === 'supply' && h.supply !== 'empty' && hand.grabFromSupply(h.supply, h.point)) input.state = 'grabbing';
+    else if (h && h.type === 'entry' && h.entry.canGrab()) { hand.grabEntry(h.entry, h.point); input.state = 'grabbing'; }
     else {
       input.state = 'panning';
       const cur = ndc.clone();
@@ -293,15 +290,15 @@ canvas.addEventListener('pointermove', (ev) => {
 function finishPress(ev) {
   if (input.pointerId != null && ev.pointerId !== input.pointerId) return;
   const st = input.state, h = input.hit;
-  if (st === 'grabbing') { const r = hand.release(); if (r && r.speed > 9) fx.floatAt(new THREE.Vector3().copy(r.d.body.translation()).setY(1.6), 'ビュンッ！', '', 0.6); endInput(); return; }
+  if (st === 'grabbing') { const r = hand.releaseAny(); if (r && r.speed > 9) fx.floatAt(r.d ? new THREE.Vector3().copy(r.d.body.translation()).setY(1.6) : r.entry.getPos().setY(2), 'ビュンッ！', '', 0.6); input.state = 'idle'; endInput(); ui.hideHover(); return; }
   if (st === 'pending') {
     const now = performance.now();
     const lc = input.lastClick;
     const dbl = lc && now - lc.t < 320 && Math.hypot(ev.clientX - lc.x, ev.clientY - lc.y) < 10;
     if (dbl) {
       input.lastClick = null;
-      if (lc.hit && lc.hit.kind === 'domino') hand.flick(lc.hit.d, lc.hit.point); // ドミノ上：デコピン
-      else if (!h || h.kind !== 'domino') { const p = floorPoint(ev); if (p) rig.focusOn(p, null, 0.6); } // 空き場所：注目
+      if (lc.hit && lc.hit.type === 'domino') hand.flick(lc.hit.d, lc.hit.point); // ドミノ上：デコピン
+      else if (!h && !lc.hit) { const p = floorPoint(ev); if (p) rig.focusOn(p, null, 0.6); } // 何もない所：注目（物の上では注目しない）
     } else {
       input.lastClick = { t: now, x: ev.clientX, y: ev.clientY, hit: h };
       if (tool !== 'play') toolClick(ev);
@@ -313,7 +310,7 @@ canvas.addEventListener('pointerup', (ev) => { if (gacha.active && ev.button ===
 window.addEventListener('pointerup', (ev) => { if (ev.target !== canvas && input.state !== 'idle') finishPress(ev); });
 canvas.addEventListener('pointercancel', () => endInput());
 canvas.addEventListener('lostpointercapture', () => { if (input.state === 'grabbing' || input.state === 'panning') endInput(); });
-canvas.addEventListener('pointerleave', () => { if (input.state === 'idle') ui.hideHover(); });
+canvas.addEventListener('pointerleave', () => { if (input.state === 'idle') { ui.hideHover(); hand.highlight(null); } });
 canvas.addEventListener('wheel', (ev) => {
   // つかんでいる間のホイール：高さ（Shift で傾き）。カメラのズームは止める
   if (input.state === 'grabbing') { ev.preventDefault(); ev.stopImmediatePropagation(); if (ev.shiftKey) hand.tiltBy(-Math.sign(ev.deltaY || ev.deltaX) * 0.12); else hand.adjustLift(-Math.sign(ev.deltaY) * 0.18); }
@@ -349,11 +346,24 @@ function hoverAt(ev) {
   if (performance.now() - hoverT < 70) return; // 間引いてチラつきを防ぐ
   hoverT = performance.now();
   setNdc(ev); ray.setFromCamera(ndc, camera);
-  const info = describeAt(game, hand, ray, camera);
+  const pk = tool === 'play' ? hand.pickAny(ray) : null;
+  const can = pk && (pk.type !== 'supply' || pk.supply !== 'empty') && (pk.type !== 'entry' || pk.entry.canGrab());
+  hand.highlight(can ? pk : null);
+  canvas.style.cursor = can ? 'grab' : '';
+  const info = pk && pk.type === 'entry' ? describeEntry(pk.entry) : describeAt(game, hand, ray, camera);
   if (!info) { ui.hideHover(); return; }
   ui.showHover(info, ev.clientX, ev.clientY);
 }
+/** 小物・人・設備のホバー情報（人やルンバ等は詳しい情報、それ以外は名前と操作） */
+function describeEntry(e) {
+  const base = e === game.crateEntry ? null : describeAt(game, hand, ray, camera);
+  if (base && e.kind !== 'prop') { base.note = [base.note, 'ドラッグで持ち上げて運べる'].filter(Boolean).join('\n'); return base; }
+  const crate = e === game.crateEntry;
+  return { title: `✋ ${e.name}`, rows: crate ? [['中身', `${game.crate.count}枚`], ['置き場所', game.crate.pinned ? 'プレイヤーが置いた場所' : '建設の先頭についていく']] : [], note: crate ? '中のドミノをドラッグ：1枚取り出す／縁・旗をドラッグ：箱ごと運ぶ' : 'ドラッグで持ち上げて運べる（離すと落ちる）' };
+}
 function hoverHeld() {
+  hand.highlight(null);
+  if (hand.heldObj) { ui.showHover({ title: `✋ ${hand.heldObj.entry.name}を運んでいる`, rows: [['高さ', 'ホイール'], ['向き', 'Q / E']], note: '離した所に落ちる' }, input.mx, input.my, true); return; }
   const h = hand.held;
   if (!h) return;
   ui.showHover({ title: '✋ つかんでいる', rows: [['高さ', 'ホイール'], ['向き', 'Q / E'], ['傾き', 'Shift＋ホイール']], note: h.guide ? 'マスの上：そっと離すと立つ' : '勢いよく離すと投げる' }, input.mx, input.my, true);
