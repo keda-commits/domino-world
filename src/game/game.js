@@ -973,7 +973,7 @@ export class Game {
         if (nx.domino && run.toppled.has(nx.domino)) continue;
         if (sl.order <= bestOrder) continue;
         bestOrder = sl.order; stop = nx;
-        const st = this.stoppers.find((s) => (s.slot === sl && s.next === nx) && s.armed);
+        const st = this.stoppers.find((s) => (s.slot === sl || s.slot === nx) && s.armed);
         if (!nx.domino) reason = '未建設のすき間があった';
         else if (st) reason = st.locked ? 'ストッパーが解除されていなかった（ロック中）' : 'ストッパーが閉じたままだった';
         else if (nx.domino.byRoomba) reason = 'ルンバに壊された';
