@@ -36,7 +36,7 @@ export class UI {
   setTool(t) {
     document.querySelectorAll('[data-tool]').forEach((b) => b.classList.toggle('on', b.dataset.tool === t || (t.startsWith('piece:') && b.dataset.tool === 'pieces')));
     const hints = {
-      play: 'クリック：設計図の先頭にドミノを置く／倒れたドミノを起こす（長押しで連続）。ドラッグでカメラ回転。',
+      play: 'ドラッグ：ドミノをつかむ（おもちゃ箱・資材箱から取り出せる）／離す：置く・勢いで投げる／ダブルクリック：デコピン／何もない所をドラッグ：カメラ移動',
       test: '試し倒し：設計図の上で始点→終点をクリック。その区間だけ倒して、自動で元に戻します。',
       stopper: 'ストッパーをクリックして🔒ロック（本番でも外さない）を切り替え。',
     };
@@ -89,12 +89,13 @@ export class UI {
     $('pl-text').innerHTML = `建設 <b>${fmt(frontIdx)}</b> / ${fmt(total)} 個 ・ 在庫 ${fmt(g.stock + g.crate.count)} ・ 人員 ${crew}人${g.level('machine') ? ' ＋ 自動設置機' : ''} ・ 最長連鎖 ${fmt(g.records[g.stageId].best)}`;
     // 小さな警告（確認ダイアログの代わり）
     const w = [];
+    if (g.hint && g.time < g.hint.until) w.push(`<span class="hint">${g.hint.text}</span>`);
     if (pf.fallen) w.push(`倒れたまま ${pf.fallen}個（🧹で起こせる）`);
     if (pf.locked) w.push(`🔒ロック中のストッパー ${pf.locked}個`);
     if (g.roomba && g.roomba.state !== 'dock') w.push('🤖 ルンバ巡回中！');
     else if (g.roomba) w.push(`<span class="info">🤖 ルンバ出動まで ${Math.ceil(g.roomba.timer)}秒（次：${g.roomba.pattern.name}）</span>`);
     if (g.alarm) w.push('⚠ 警報発令中');
-    const wh = w.map((x) => (x.startsWith('<span class="info">') ? `<div class="w info">${x.slice(19, -7)}</div>` : `<div class="w">${x}</div>`)).join('');
+    const wh = w.map((x) => (x.startsWith('<span class="info">') ? `<div class="w info">${x.slice(19, -7)}</div>` : x.startsWith('<span class="hint">') ? `<div class="w hint">${x.slice(19, -7)}</div>` : `<div class="w">${x}</div>`)).join('');
     if (wh !== this._warns) { $('warns').innerHTML = wh; this._warns = wh; }
     // ボタン
     const building = g.mode === 'build';
@@ -195,17 +196,21 @@ export class UI {
       html += `<div class="set-row"><label>画質</label><select id="set-q"><option value="low">低（軽い）</option><option value="mid">中（おすすめ）</option><option value="high">高（被写界深度）</option></select></div>
         <div class="set-row"><label>BGM 音量</label><input id="set-bgm" type="range" min="0" max="1" step="0.05" value="${s.music}"></div>
         <div class="set-row"><label>効果音 音量</label><input id="set-sfx" type="range" min="0" max="1" step="0.05" value="${s.sfx}"></div>
+        <div class="set-row"><label>ルンバ・敵の音量</label><input id="set-threat" type="range" min="0" max="1" step="0.05" value="${s.threatVol ?? 0.6}"></div>
         <div class="set-row"><label>ガチャ早送り</label><input id="set-gfast" type="checkbox" ${s.gachaFast ? 'checked' : ''}></div>
         <p style="color:#d9c9b6">セーブは自動（建設中のドミノも保存）。</p>
         <button class="pbtn" id="set-save">💾 今すぐセーブ</button><button class="pbtn" id="set-load">📂 最後のセーブを読み込む</button><button class="pbtn warn" id="set-reset">↺ 最初からやり直す</button>`;
     } else if (t === 'help') {
-      html += `<h3>遊び方</h3><ol><li>床に描かれた<b>設計図（点線）</b>に沿って、ドミノを先頭から並べます。<b>クリック</b>で1個、<b>長押し</b>で連続。</li>
-        <li>いつでも<b>「▶ 倒す！」</b>。途中までしか並んでいなくても倒せます。倒れた<b>1枚 = 1XP</b>。上のゲージが満タンでガチャ。</li>
-        <li>連鎖が<b>中間ゴール</b>の装置に届くと、<b>確定ガチャ</b>（各中間ゴールで一度きり）。</li>
-        <li>ガチャで人や機械を増やすと、建設が自動になり速くなります。倒れたドミノも起こしてくれます。</li>
-        <li>スタートからの一本の連鎖が<b>最終ゴール装置</b>を動かせばクリア。ステージ2ではルンバから列を守ろう。</li></ol>
-        <h3>カメラ</h3><p>左ドラッグ：回転／右ドラッグ：移動／ホイール：カーソル位置へズーム／WASD：移動／ダブルクリック：そこへ注目<br>上の「建設・観賞・追跡・俯瞰」で視点を切り替え、⟲（Home）で建設現場へ戻る。</p>
-        <h3>キー</h3><p>Enter：倒す／R（長押し）：片付け／1〜4：道具／B・V・F・O：建設・観賞・追跡・俯瞰／Home：視点リセット／P：一時停止／Space：ガチャ演出をスキップ／1〜3：ガチャの選択</p>`;
+      html += `<h3>遊び方</h3><ol><li>床の<b>設計図（点線）</b>に沿ってドミノを並べます。おもちゃ箱や資材箱から<b>ドラッグでドミノを取り出し</b>、マスの上で<b>そっと離す</b>と立ちます（緑の輪がガイド）。</li>
+        <li>いつでも<b>「▶ 倒す！」</b>。倒れた<b>1枚 = 1XP</b>。上のゲージが満タンでガチャ。本番中は手を出さず、連鎖を見守ります（俯瞰／連鎖追跡の切り替えだけ可能）。</li>
+        <li>連鎖が<b>中間ゴール</b>の装置に届くと<b>確定ガチャ</b>（各中間ゴールで一度きり）。</li>
+        <li>ガチャで人や機械を増やすと、建設・運搬・片付けが自動になります。</li>
+        <li>建設中の事故やネズミのいたずらでドミノが倒れ始めたら、<b>連鎖の先のドミノを1枚つかんで抜く</b>と止まります。ストッパーズを呼ぶと自動で止めてくれます。</li>
+        <li>スタートからの一本の連鎖が<b>最終ゴール装置</b>を動かせばクリア。</li></ol>
+        <h3>ドミノを触る</h3><p><b>ドラッグ</b>：つかんで動かす（立っている・倒れている・資材置き場）／<b>離す</b>：その場に落とす（勢いよく動かして離すと投げる）<br>
+        つかんでいる間：<b>ホイール</b>で高さ、<b>Q / E</b>で向き、<b>Shift＋ホイール</b>で傾き<br><b>ダブルクリック</b>：デコピン（押した向きに倒れる）／人に投げると…びっくりします</p>
+        <h3>カメラ</h3><p><b>左ドラッグ（何もない所）</b>／WASD：平行移動　<b>右ドラッグ</b>／Alt＋左ドラッグ：回転　ホイール：カーソル位置へズーム<br>空き場所をダブルクリック：そこへ注目　Home：建設現場へ戻る　上の「建設・観賞・追跡・俯瞰」で視点切り替え</p>
+        <h3>キー</h3><p>Enter：倒す／R（長押し）：片付け／1〜4：道具／B・V・F・O：視点／P：一時停止／ガチャ中：1〜3で選択・Spaceでスキップ</p>`;
     }
     if (soft && t !== 'records' && t !== 'crew') return;
     body.innerHTML = html;
@@ -215,6 +220,7 @@ export class UI {
       $('set-q').onchange = (e) => this.h.setSetting('quality', e.target.value);
       $('set-bgm').oninput = (e) => this.h.setSetting('music', +e.target.value);
       $('set-sfx').oninput = (e) => this.h.setSetting('sfx', +e.target.value);
+      $('set-threat').oninput = (e) => this.h.setSetting('threatVol', +e.target.value);
       $('set-gfast').onchange = (e) => this.h.setSetting('gachaFast', e.target.checked);
       $('set-save').onclick = () => this.h.save(true);
       $('set-load').onclick = () => this.h.load();

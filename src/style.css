@@ -194,3 +194,5 @@ body.mode-gacha #hud-tr { opacity: 0; pointer-events: none; }
 #hover-tip .r { display: flex; justify-content: space-between; gap: 10px; }
 #hover-tip .r span:first-child { color: #9aa4b5; }
 #hover-tip .warn { color: #ff9f8a; }
+
+#warns .w.hint { background: rgba(255, 196, 61, .92); color: #2b1d00; font-weight: 800; font-size: 14px; padding: 7px 14px; animation: pulse .7s infinite alternate; }

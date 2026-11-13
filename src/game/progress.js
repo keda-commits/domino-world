@@ -56,6 +56,8 @@ export class Progress {
     if (clover && rand() < 0.25 * (clover + 1)) n = Math.max(n, 4);
     if (this.extraChoice) { n = Math.max(n, 3 + this.extraChoice); this.extraChoice = 0; }
     const picks = [];
+    // 確実に出す選択肢（防衛チュートリアルのストッパーズなど）
+    for (const id of ticket.force || []) if (PARTS[id] && this.lv(id) < PARTS[id].max) picks.push({ id, guaranteed: true });
     // 合体設計図（進化）は条件を満たしたら優先して出す
     if (!ticket.category) for (const ev of this.readyEvolutions()) if (picks.length < 1) picks.push({ evo: ev });
     // 序盤の保証

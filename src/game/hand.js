@@ -59,6 +59,7 @@ export class Hand {
   grab(d, point) {
     const g = this.game;
     if (this.held) this.release();
+    if (d.slot && d.slot.domino === d && !d.toppled) g.onHandGrab && g.onHandGrab(d);
     if (d.slot && d.slot.domino === d) { d.slot.domino = null; g.unbuiltDirty = true; }
     d.slot = null; d.claim = null; d.accident = false; d.byRoomba = false;
     const b = d.body;

@@ -122,7 +122,7 @@ export class Audio {
   bonk() { this.tone(160, 0.2, 'sine', 0.25, 0, 90); this.noiseHit(500, 1, 0.4, 0.1); }
   punch() { this.noiseHit(400, 1, 0.8, 0.12); this.tone(120, 0.15, 'sine', 0.3, 0, 60); }
   start() { this.tone(300, 0.25, 'sawtooth', 0.05, 0, 900); }
-  siren() { for (let i = 0; i < 3; i++) { this.tone(880, 0.18, 'square', 0.045, i * 0.36, 1320); this.tone(1320, 0.18, 'square', 0.045, i * 0.36 + 0.18, 880); } }
+  siren() { for (let i = 0; i < 2; i++) { this.tone(880, 0.14, 'triangle', 0.05, i * 0.3, 1175); this.tone(1175, 0.14, 'triangle', 0.05, i * 0.3 + 0.15, 880); } }
   present() { [784, 988, 1175, 1568].forEach((f, i) => this.tone(f, 0.16, 'triangle', 0.13, i * 0.06)); }
   chest() { [523, 659, 784, 1046, 1318, 1568].forEach((f, i) => this.tone(f, 0.22, 'triangle', 0.12, i * 0.07)); }
   bell() { [1318, 1568, 2093].forEach((f, i) => this.tone(f, 1.4, 'sine', 0.12, i * 0.02)); this.tone(659, 1.6, 'sine', 0.1); }
@@ -130,10 +130,6 @@ export class Audio {
   magnet(n) { for (let i = 0; i < Math.min(n, 12); i++) this.tone(900 + i * 80, 0.08, 'sine', 0.06, 0.4 + i * 0.05); }
   rewind() { this.tone(1600, 0.6, 'sawtooth', 0.05, 0, 200); for (let i = 0; i < 10; i++) this.tone(2000 - i * 120, 0.03, 'square', 0.04, i * 0.05); }
   toot() { this.tone(587, 0.18, 'square', 0.06); this.tone(740, 0.25, 'square', 0.06, 0.2); }
-  roombaStart() { // 低いうなり＋2音のサイレン
-    this.tone(70, 0.9, 'sawtooth', 0.09, 0, 55); this.tone(110, 0.9, 'square', 0.03, 0, 90);
-    for (let i = 0; i < 3; i++) { this.tone(392, 0.16, 'square', 0.05, 0.25 + i * 0.36, 392); this.tone(311, 0.16, 'square', 0.05, 0.43 + i * 0.36, 311); }
-  }
   /** デコピンの「ピンッ」 */
   flick() { this.tone(2200, 0.05, 'triangle', 0.12, 0, 3200); this.tone(1400, 0.08, 'sine', 0.06, 0.01, 900); }
   gachaSpin() { for (let i = 0; i < 8; i++) this.tone(600 + i * 60, 0.05, 'square', 0.04, i * 0.07); }
@@ -147,20 +143,40 @@ export class Audio {
   levelUp() { [523, 659, 784, 1046].forEach((f, i) => this.tone(f, 0.18, 'triangle', 0.12, i * 0.08)); }
 
   /** ルンバの掃除音（距離で音量） */
+  /** 脅威（ルンバ・ネズミ等）の音量（設定で個別に調整できる） */
+  setThreatVol(v) { this.threatVol = v; if (this.threat) this.threat.gain.value = v; }
+  threatOut() {
+    if (!this.threat) { this.threat = this.ctx.createGain(); this.threat.gain.value = this.threatVol ?? 0.6; this.threat.connect(this.sfx); }
+    return this.threat;
+  }
+  /** ルンバの走行音：低い唸りではなく、おもちゃの軽いモーター音（小さめ・高めの帯域） */
   roombaHum(vol) {
     if (!this.ok) return;
     if (!this.hum) {
       const s = this.ctx.createBufferSource(); s.buffer = this.longNoise; s.loop = true;
-      const f = this.ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 500;
-      const o = this.ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = 95;
-      const og = this.ctx.createGain(); og.gain.value = 0.15;
+      const f = this.ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1500; f.Q.value = 3;
+      const o = this.ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = 240;
+      const lfo = this.ctx.createOscillator(); lfo.frequency.value = 7; const lg = this.ctx.createGain(); lg.gain.value = 9; lfo.connect(lg).connect(o.frequency);
+      const og = this.ctx.createGain(); og.gain.value = 0.25;
       const g = this.ctx.createGain(); g.gain.value = 0;
-      s.connect(f).connect(g); o.connect(og).connect(g); g.connect(this.sfx);
-      s.start(); o.start();
+      s.connect(f).connect(g); o.connect(og).connect(g); g.connect(this.threatOut());
+      s.start(); o.start(); lfo.start();
       this.hum = { g };
     }
-    this.hum.g.gain.setTargetAtTime(vol, this.ctx.currentTime, 0.2);
+    this.hum.g.gain.setTargetAtTime(Math.min(0.06, vol * 0.13), this.ctx.currentTime, 0.3);
   }
+  /** 接近：近いほど間隔が短い「ピッ…ピッ」（小さく、緊張感だけ） */
+  roombaNear(k, dt) {
+    if (!this.ok || k <= 0) { this._nearT = 0; return; }
+    this._nearT = (this._nearT || 0) - dt;
+    if (this._nearT <= 0) { this._nearT = 1.4 - k * 1.0; this.tone(1320, 0.07, 'sine', 0.035 + k * 0.035, 0, null, this.threatOut()); }
+  }
+  /** 出動：おもちゃっぽい上昇音 */
+  roombaStart() { [523, 659, 784].forEach((f, i) => this.tone(f, 0.12, 'triangle', 0.07, i * 0.09, null, this.threatOut())); }
+  /** 出動の予告（3回の短いピッ） */
+  roombaWarn() { for (let i = 0; i < 3; i++) this.tone(988, 0.08, 'square', 0.035, i * 0.32, null, this.threatOut()); }
+  /** 帰還・充電：静かな下降音 */
+  roombaDock() { [784, 659, 523].forEach((f, i) => this.tone(f, 0.18, 'sine', 0.045, i * 0.12, null, this.threatOut())); }
 
   checkpoint() { [784, 988, 1175, 1568, 1976].forEach((f, i) => this.tone(f, 0.22, 'triangle', 0.12, i * 0.06)); this.bell(); }
   capsule() { this.noiseHit(1800, 2, 0.35, 0.06); this.tone(420 + Math.random() * 80, 0.08, 'sine', 0.1, 0, 300); }

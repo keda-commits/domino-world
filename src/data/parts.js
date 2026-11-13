@@ -171,7 +171,7 @@ export const GACHA = {
 // 経験値：倒れたドミノ1枚 ＝ 1XP（「あと何枚でガチャ」がそのまま枚数になる）。
 // 自己ベストを超えた分は別枠のボーナス。中間ゴールは経験値ではなく確定ガチャ。
 export const XP = {
-  need: (lv) => Math.round(25 + 14 * Math.pow(lv - 1, 1.35)),
+  need: (lv) => (lv === 1 ? 15 : Math.round(25 + 14 * Math.pow(lv - 1, 1.35))), // 最初のガチャは手で並べた短い連鎖で届く
   forRun: (n) => n,
   recordBonusPerDomino: 0.5,
 };

@@ -27,7 +27,7 @@ const rig = new CameraRig(camera, canvas);
 const gacha = new GachaShow({ scene, rig, audio, game, root: $('gacha3d') });
 
 const settings = { speed: 1, music: 0.45, sfx: 0.85, quality: 'mid', autoCam: true, seenHelp: false, gachaFast: false, ...loadSettings() };
-audio.setMusicVol(settings.music); audio.setSfxVol(settings.sfx);
+audio.setMusicVol(settings.music); audio.setSfxVol(settings.sfx); audio.threatVol = settings.threatVol ?? 0.6;
 view.setQuality(settings.quality);
 gacha.speed = settings.gachaFast ? 2.5 : 1;
 
@@ -63,7 +63,7 @@ game.loadStage(startStage, stageSaves[startStage]);
 function placeGachaMachine() {
   const sp = game.def.gachaSpot;
   gacha.place(sp);
-  game.stage.obstacles.push({ x: sp.x, z: sp.z, r: 3.2, roomba: true, build: true });
+  game.stage.obstacles.push({ x: sp.x, z: sp.z + 3, hw: 6, hd: 5.5, yaw: 0, roomba: true, build: true }); // 展示スペースには何も置かない
 }
 placeGachaMachine();
 
@@ -139,6 +139,7 @@ const ui = new UI(game, {
     if (k === 'quality') { view.setQuality(v); if (game.stage.sun) view.useSun(game.stage.sun); }
     if (k === 'music') audio.setMusicVol(v);
     if (k === 'sfx') audio.setSfxVol(v);
+    if (k === 'threatVol') audio.setThreatVol(v);
     if (k === 'gachaFast') gacha.speed = v ? 2.5 : 1;
   },
   gachaFast: () => { const on = gacha.toggleFast(); settings.gachaFast = on; writeSettings(settings); return on; },
@@ -182,6 +183,7 @@ game.on('runEnd', (r) => {
   save();
 });
 game.on('testEnd', (r) => fx.floatAt(rig.controls.target.clone().setY(3), r.ok ? `🧪 試し倒し成功！ ${r.reached}/${r.total}` : `🧪 ${r.reached}/${r.total} で停止（元に戻しました）`, r.ok ? 'coin' : 'warn', 2.6));
+game.on('tutorialGacha', () => setTimeout(() => { if (game.mode === 'build') startGacha(); }, 600));
 game.on('stageLoaded', () => { if (view && game.stage.sun) view.useSun(game.stage.sun); });
 
 /** 連鎖のあと、ガチャがあれば自動で始める */
@@ -449,7 +451,11 @@ function frame(now) {
   gacha.update(real, camera, window.innerWidth, window.innerHeight);
   view.setDof(cam.dof && settings.quality === 'high', cam.focusDist);
   if (game.stage.sunOffset) view.followShadow(rig.controls.target, game.stage.sunOffset);
-  if (game.roomba) { const d = game.roomba.pos.distanceTo(rig.controls.target); audio.roombaHum(game.roomba.state === 'dock' ? 0 : Math.max(0, 0.45 - d / 100)); }
+  if (game.roomba) {
+    const d = game.roomba.pos.distanceTo(rig.controls.target), moving = game.roomba.state !== 'dock';
+    audio.roombaHum(moving ? Math.max(0, 0.45 - d / 100) : 0);
+    audio.roombaNear(moving && !paused ? Math.max(0, 1 - d / 28) : 0, real);
+  }
   fx.update(paused ? 0 : real, window.innerWidth, window.innerHeight);
   uiT -= real;
   if (uiT <= 0) { ui.refresh(); uiT = 0.15; }

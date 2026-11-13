@@ -57,7 +57,22 @@ export class Gnome {
   // ---------- 基本動作 ----------
   goto(targetFn, onArrive) { this.state = 'walk'; this.targetFn = targetFn; this.onArrive = onArrive; }
   act(time, pose, onDone) { this.state = 'act'; this.timer = time; this.pose = pose; this.poseT = 0; this.onDone = onDone; }
-  wait(time, pose = 'idle') { this.act(time, pose, () => this.think()); }
+  wait(time, pose = 'idle') {
+    // 手が空いたら（長めの待ち）自分の待機所へ戻る。ガチャの前などに人が溜まらないように
+    const home = time >= 1 && (pose === 'idle' || pose === 'shrug') && this.game.mode === 'build' && this.role !== 'guard' ? this.game.campPos(this.role) : null;
+    if (home && Math.hypot(home.x - this.pos.x, home.z - this.pos.z) > 4) {
+      const off = new THREE.Vector3(Math.cos(this.id * 2.4) * 2, 0, Math.sin(this.id * 2.4) * 2).add(home);
+      return this.goto(() => off, () => this.act(time, pose, () => this.think()));
+    }
+    this.act(time, pose, () => this.think());
+  }
+  /** 待機所へ向かう（ガチャで加わった直後など） */
+  goHome() {
+    const home = this.game.campPos(this.role);
+    if (!home) return this.think();
+    const off = new THREE.Vector3(Math.cos(this.id * 2.4) * 2, 0, Math.sin(this.id * 2.4) * 2).add(home);
+    this.goto(() => off, () => this.act(0.8, 'salute', () => this.think()));
+  }
   say(text, cls = '') { this.game.fx.floatObj(this.root, text, cls, 1.4); }
   releaseJob() {
     if (!this.job) return;
@@ -467,7 +482,7 @@ export class Workers {
   hire(role, quiet = false) {
     const g = this.game;
     const dep = g.depots[0];
-    const spawn = (role === 'guard' || role === 'restorer') && g.hqPos ? g.hqPos.clone() : dep.pos.clone();
+    const spawn = g.campPos(role) || ((role === 'guard' || role === 'restorer') && g.hqPos ? g.hqPos.clone() : dep.pos.clone());
     spawn.x += (Math.random() - 0.5) * 2; spawn.z += 2 + Math.random() * 1.5;
     const gn = new Gnome(role, this.nextId++, g, spawn);
     if (role === 'guard') gn.home = g.guardPost(this.count('guard'));

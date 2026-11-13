@@ -139,19 +139,27 @@ export class Roomba {
       case 'dock':
         this.timer -= dt;
         this.preview.visible = true;
-        if (this.timer <= 0) { this.state = 'patrol'; this.wp = 0; game.onRoombaDepart && game.onRoombaDepart(this); }
+        if (this.timer <= 3 && !this.warned) { this.warned = true; game.onRoombaWarn && game.onRoombaWarn(this); } // 出発の予告
+        if (this.timer <= 0) { this.warned = false; this.state = 'leave'; this.leaveT = 1.2; this.trail = [this.pos.clone()]; game.onRoombaDepart && game.onRoombaDepart(this); }
+        break;
+      case 'leave':
+        // 充電台からゆっくりバックで離れてから向きを変える
+        this.leaveT -= dt;
+        this.move(-1.4 * dt); // 充電台は背中側（yaw=π で台を向いて止まっている）
+        if (this.leaveT <= 0) { this.state = 'patrol'; this.wp = 0; }
         break;
       case 'patrol':
       case 'return': {
         if (this.paused > 0 && this.state === 'patrol') break;
-        const pts = this.state === 'patrol' ? this.pattern.pts : [[this.def.dock.x, this.def.dock.z + this.r + 0.5]];
+        const pts = this.state === 'patrol' ? this.pattern.pts : this.returnPath || [[this.def.dock.x, this.def.dock.z + this.r + 0.5]];
         const [tx, tz] = pts[Math.min(this.wp, pts.length - 1)];
         const dx = tx - this.pos.x, dz = tz - this.pos.z;
         const dist = Math.hypot(dx, dz);
         if (dist < 1.2) {
+          if (this.state === 'patrol') (this.trail ||= []).push(new THREE.Vector3(tx, 0, tz));
           this.wp++;
           if (this.wp >= pts.length) {
-            if (this.state === 'patrol') { this.state = 'return'; this.wp = 0; }
+            if (this.state === 'patrol') this.beginReturn(game);
             else this.dockIn(game);
           }
           break;
@@ -159,9 +167,9 @@ export class Roomba {
         // 目標に近づけない時間が続いたら（家具のすき間にはまったら）次の地点へ
         if (this.progWp !== this.wp || this.progState !== this.state) { this.progWp = this.wp; this.progState = this.state; this.bestDist = dist; this.progT = 0; }
         if (dist < this.bestDist - 0.5) { this.bestDist = dist; this.progT = 0; } else this.progT += dt;
-        if (this.progT > 6 && this.state === 'patrol') { this.wp++; this.progT = 0; if (this.wp >= pts.length) { this.state = 'return'; this.wp = 0; } break; }
-        // 帰還が長引いたら（家具の角などで回り続けたら）そのまま充電台に戻る
-        if (this.state === 'return') { this.returnT = (this.returnT || 0) + dt; if (this.returnT > 40) { this.pos.set(tx, 0, tz); this.dockIn(game); break; } }
+        if (this.progT > 6 && this.state === 'patrol') { this.wp++; this.progT = 0; if (this.wp >= pts.length) this.beginReturn(game); break; }
+        // 帰り道で行き詰まったら：切り返し（後退＋旋回）してから、通ってきた地点を1つ先へ（瞬間移動はしない）
+        if (this.progT > 5 && this.state === 'return') { this.progT = 0; this.reverse = 0.9; this.avoidDir = Math.random() < 0.5 ? 1 : -1; this.stuckTries = (this.stuckTries || 0) + 1; if (this.stuckTries % 2 === 0 && this.wp < pts.length - 1) this.wp++; break; }
         let want = Math.atan2(dx, dz);
         const sp = this.speed * (this.aggressive ? 1.5 : 1) * (this.state === 'return' && this.recalled ? 1.6 : 1);
         if (this.reverse > 0) {
@@ -214,8 +222,20 @@ export class Roomba {
     this.pos.z += Math.cos(this.yaw) * step;
   }
 
+  /** 帰り道：通ってきた地点を逆にたどって充電台へ（通れることが分かっている道） */
+  beginReturn(game) {
+    const dockPt = [this.def.dock.x, this.def.dock.z + this.r + 0.5];
+    const back = (this.trail || []).slice().reverse().map((v) => [v.x, v.z]);
+    // 今いる所から一番近い地点からたどる
+    let best = 0, bd = Infinity;
+    back.forEach(([x, z], i) => { const d = (x - this.pos.x) ** 2 + (z - this.pos.z) ** 2; if (d < bd) { bd = d; best = i; } });
+    this.returnPath = [...back.slice(best), dockPt];
+    this.state = 'return'; this.wp = 0; this.stuckTries = 0;
+    game && game.onRoombaReturn && game.onRoombaReturn(this);
+  }
   dockIn(game) {
-    this.state = 'dock'; this.returnT = 0;
+    this.state = 'dock'; this.returnT = 0; this.returnPath = null; this.trail = [];
+    game && game.onRoombaDock && game.onRoombaDock(this);
     this.timer = this.recalled ? Math.max(this.def.idleTime, this.recallTime || 45) : this.def.idleTime;
     this.recalled = false;
     this.patternIdx++;
@@ -227,7 +247,7 @@ export class Roomba {
   recall(time = 45) {
     this.recallTime = time;
     if (this.state === 'dock') { this.timer = Math.max(this.timer, time); return; }
-    this.state = 'return'; this.wp = 0; this.recalled = true;
+    this.recalled = true; this.beginReturn(null);
   }
 
   sync() {
