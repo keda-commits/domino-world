@@ -26,6 +26,11 @@ export const ROLE_STYLE = {
   guard: { body: '#16295a', hat: '#1f6fe0', leg: '#101a33', kind: 'stopper', vest: '#ff7a1a', badge: true },
   // おもちゃの兵隊：赤い上着・白いたすき・黒い筒帽
   soldier: { body: '#d6336c', hat: '#1b1b3a', leg: '#1b1b3a', kind: 'soldier' },
+  // 鉄道勢力の試作（Ver.0.6 試作）：エリート建築士・レールはがし隊・鉄道の修理班・駅長
+  architect: { body: '#f1f3f5', hat: '#ffffff', leg: '#2b3a55', kind: 'hardhat' },
+  wrecker: { body: '#f76707', hat: '#212529', leg: '#495057', kind: 'hardhat' },
+  railcrew: { body: '#1c3d7a', hat: '#1c3d7a', leg: '#14284f', kind: 'cap' },
+  stationmaster: { body: '#1c3d7a', hat: '#c92a2a', leg: '#14284f', kind: 'cap' },
   watchman: { body: '#1f5fd0', hat: '#1f6fe0', leg: '#1b2a4a', kind: 'stopper', vest: '#9be3ff' },
 };
 

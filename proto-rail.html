@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>試作：鉄道勢力との共存と衝突</title>
+  <meta name="robots" content="noindex" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@500;800&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <canvas id="c"></canvas>
+  <div id="floaters"></div>
+  <div id="follow"></div>
+  <div id="toast"></div>
+  <div id="left" class="pp">
+    <h1 class="mini-head">🚂 試作：鉄道勢力<span class="badge">試作</span><button class="mini" data-min="left">－</button></h1>
+    <div class="tabs"><button class="tab" data-s="A">A 立体交差</button><button class="tab" data-s="B">B 線路撤去</button><button class="tab" data-s="C">C 3つの方法</button></div>
+    <h2 id="sc-title"></h2>
+    <div id="sc-goal"></div>
+    <div id="sc-steps"></div>
+    <div id="sc-tips"></div>
+    <h2>ドミノ建設隊</h2>
+    <div id="our-state"></div>
+    <label><input type="checkbox" id="keep" checked /> やり直しても歩道橋・階段は残す</label>
+  </div>
+  <div id="right" class="pp">
+    <h2 style="margin-top:0" class="mini-head">🚃 ぽっぽ鉄道 <small>（<span id="clock"></span>）</small><button class="mini" data-min="right">－</button></h2>
+    友好度 <b id="rel-num"></b>
+    <div class="relwrap"><div id="rel-bar"></div></div>
+    <div id="trains"></div>
+    <div id="rail-state" style="margin-top:6px"></div>
+    <h2>鉄道ニュース</h2>
+    <div id="news"></div>
+    <h2>比較表（試作C）</h2>
+    <table id="table"></table>
+  </div>
+  <div id="bottom" class="pp">
+    <button id="b-run">▶ 倒す</button>
+    <button id="b-reset">↺ 次の挑戦（翌日）</button>
+    <span>｜速さ</span><button data-speed="1" class="on">×1</button><button data-speed="3">×3</button><button data-speed="6">×6</button>
+    <span>｜視点</span><button data-view="all">全体</button><button data-view="cross">交差地点</button><button data-view="stairs">階段</button><button data-view="side">線路から</button><button data-view="bypass">迂回線</button><button data-view="stationA">駅A</button><button data-view="depot">車庫</button><button id="b-follow-chain">連鎖を追う</button>
+    <button id="b-rel" title="試作用">友好度リセット</button>
+  </div>
+  <script type="module" src="/src/proto/rail/main.js"></script>
+</body>
+</html>
