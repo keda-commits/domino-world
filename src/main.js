@@ -94,6 +94,7 @@ function afterStageLoad() {
   camera.position.set(c.x + ctx.stageSize * 0.3, ctx.stageSize * 0.75, c.z + ctx.stageSize * 0.7);
   rig.controls.target.copy(c);
   rig.setView('build', ctx);
+  rig.finishFly(); // 開始直後は演出で飛ばさず、すぐ操作できる状態にする
   ui.setView('build');
   setTool('play');
 }
@@ -243,6 +244,7 @@ window.addEventListener('pointerdown', (ev) => {
 
 canvas.addEventListener('pointerdown', (ev) => {
   audio.ensure();
+  if (!gacha.active) rig.fly = null; // 自動のカメラ移動は、プレイヤーが触った瞬間に止める
   if (gacha.active || inputLocked()) return;
   if (ev.button === 2 && tool.startsWith('piece:')) { setTool('play'); return; }
   if (ev.button !== 0) { endInput(); return; }
@@ -341,7 +343,7 @@ function toolClick(ev) {
 }
 
 // ---------------- ホバーステータス ----------------
-let hoverT = 0;
+let hoverT = 0, lastHoverEv = null;
 function hoverAt(ev) {
   if (performance.now() - hoverT < 70) return; // 間引いてチラつきを防ぐ
   hoverT = performance.now();
@@ -352,6 +354,8 @@ function hoverAt(ev) {
   canvas.style.cursor = can ? 'grab' : '';
   const info = pk && pk.type === 'entry' ? describeEntry(pk.entry) : describeAt(game, hand, ray, camera);
   if (!info) { ui.hideHover(); return; }
+  if (pk && pk.type === 'domino' && pk.stack > 1) { info.rows = [['重なり', `${pk.stackPos} / ${pk.stack} 枚目を選択中（Tab で切り替え）`], ...(info.rows || [])]; }
+  lastHoverEv = ev;
   ui.showHover(info, ev.clientX, ev.clientY);
 }
 /** 小物・人・設備のホバー情報（人やルンバ等は詳しい情報、それ以外は名前と操作） */
@@ -387,6 +391,7 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (input.state === 'grabbing' && (e.code === 'KeyQ' || e.code === 'KeyE')) { hand.rotate(e.code === 'KeyQ' ? 0.2 : -0.2); e.preventDefault(); return; }
+  if (e.code === 'Tab' && input.state === 'idle') { hand.cycleStack(); hoverT = 0; if (lastHoverEv) hoverAt(lastHoverEv); e.preventDefault(); return; }
   if (rig.isMoveKey(e.code) && !e.ctrlKey && !e.metaKey && !e.altKey) { rig.keyDown(e.code); e.preventDefault(); return; }
   if (e.repeat) return;
   switch (e.code) {

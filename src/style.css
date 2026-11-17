@@ -196,3 +196,8 @@ body.mode-gacha #hud-tr { opacity: 0; pointer-events: none; }
 #hover-tip .warn { color: #ff9f8a; }
 
 #warns .w.hint { background: rgba(255, 196, 61, .92); color: #2b1d00; font-weight: 800; font-size: 14px; padding: 7px 14px; animation: pulse .7s infinite alternate; }
+
+/* 下の操作パネル：ボタン以外の透明な部分はクリックを通す（資材箱などがパネルの下にあってもつかめる） */
+#bottom { pointer-events: none; }
+#bottom button, #bottom .tools, #bottom .run-btn, #bottom #piece-pop, #bottom .bt-row > * { pointer-events: auto; }
+#bottom #progress-line, #bottom #tool-hint, #bottom #warns { pointer-events: none; }

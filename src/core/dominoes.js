@@ -11,6 +11,12 @@ import { R } from './physics.js';
  */
 export const PALETTE = ['#e2231a', '#f57c00', '#f9c80e', '#2fa84f', '#1565c0', '#6a1b9a', '#e91e63', '#f2f2ee', '#00897b'];
 const MAX = 3200;
+// 衝突グループ（上位16bit：所属、下位16bit：相手にするグループ）
+// 通常のドミノ＝1、倒れて固定されたドミノ＝2。手で持っているドミノは「固定ドミノ」とだけ当たらない
+// （倒れた山の下からでも引き抜ける。立っているドミノ・床・家具とはふつうに当たる）
+const G_NORMAL = (0x0001 << 16) | 0xffff;
+const G_FIXED = (0x0002 << 16) | 0xffff;
+const G_HELD = (0x0001 << 16) | (0xffff & ~0x0002);
 
 
 function makeMaterials() {
@@ -85,7 +91,7 @@ export class Dominoes {
     const r = 0.025;
     const cd = R.ColliderDesc.roundCuboid(w / 2 - r, CFG.dominoH / 2 - r, CFG.dominoT / 2 - r, r)
       .setDensity(kind === 'wide' ? 0.9 : 0.7).setFriction(0.45).setRestitution(0.05);
-    const collider = this.physics.world.createCollider(cd, body);
+    const collider = this.physics.world.createCollider(cd.setCollisionGroups(G_NORMAL), body);
     body.sleep();
     const d = {
       id: this.nextId++, idx, body, collider, kind, slot: opts.slot || null,
@@ -94,6 +100,7 @@ export class Dominoes {
     };
     this.list.add(d);
     this.byIdx.set(idx, d);
+    this._gridDirty = true;
     const color = opts.color || (kind === 'present' ? '#ffcf3a' : kind === 'clover' ? '#3fd16b' : PALETTE[(opts.colorIndex ?? d.id) % 7]);
     d.color = color;
     this.mesh.setColorAt(idx, this._c.set(color));
@@ -102,7 +109,7 @@ export class Dominoes {
     this.writeMatrix(d);
     if (opts.lying || opts.quat) {
       d.toppled = true;
-      if (opts.frozen) { body.setBodyType(R.RigidBodyType.Fixed, false); d.frozen = true; }
+      if (opts.frozen) { body.setBodyType(R.RigidBodyType.Fixed, false); d.frozen = true; collider.setCollisionGroups(G_FIXED); }
       else { d.frozen = false; body.wakeUp(); }
     }
     return d;
@@ -136,7 +143,9 @@ export class Dominoes {
 
   remove(d) {
     if (!this.list.has(d)) return;
+    this.wakeAbove(d); // 上に寝ていた固定ドミノが宙に浮いたままにならないように
     this.list.delete(d);
+    this._gridDirty = true;
     if (this.byIdx.get(d.idx) === d) this.byIdx.delete(d.idx);
     this.physics.world.removeRigidBody(d.body);
     this.mesh.setMatrixAt(d.idx, this._zero);
@@ -195,6 +204,7 @@ export class Dominoes {
         if (still || this.time - d.toppledAt > 4) {
           b.setBodyType(R.RigidBodyType.Fixed, false);
           d.frozen = true;
+          d.collider.setCollisionGroups(G_FIXED);
         }
       }
       // 立ったまま押されて落ち着いたら（ルンバに押されただけ等）再スリープ扱い
@@ -228,6 +238,74 @@ export class Dominoes {
     const t = d.body.translation();
     const dx = t.x - slot.x, dz = t.z - slot.z;
     return dx * dx + dz * dz < 0.0676 && this.upY(d) > 0.95;
+  }
+
+  /**
+   * ドミノの状態（表示・判定用）
+   * held：つかまれている／repair：人が回収・修復に向かっている／standing：マスの上で正しく立っている
+   * offslot：マスの外で立っている／fallen：倒れている（動的）／fixed：倒れて固定剛体（軽量化）
+   * buried：他のドミノの下敷き
+   */
+  stateOf(d) {
+    if (d.held) return 'held';
+    if (d.claim) return 'repair';
+    const t = d.body.translation();
+    for (const o of this.near(t.x, t.z)) {
+      if (o === d || o.removed) continue;
+      const u = o.body.translation();
+      if (u.y > t.y + 0.15 && (u.x - t.x) ** 2 + (u.z - t.z) ** 2 < 0.5 * 0.5) return 'buried';
+    }
+    if (!d.toppled && this.upY(d) > 0.95) return d.slot && this.isStandingAt(d, d.slot) ? 'standing' : 'offslot';
+    return d.frozen ? 'fixed' : 'fallen';
+  }
+  /** d の上に乗っている（寄りかかっている）ドミノを起こして、支えがなくなったら落ちるようにする */
+  wakeAbove(d) {
+    const t = d.body.translation();
+    for (const o of this.near(t.x, t.z)) {
+      if (o === d || o.removed || o.held) continue;
+      const u = o.body.translation();
+      if (u.y >= t.y - 0.05 && (u.x - t.x) ** 2 + (u.z - t.z) ** 2 < 1.0) { this.unfreeze(o); o.body.wakeUp(); }
+    }
+  }
+  /**
+   * 近くのドミノ（空間グリッド。1マス=1.5）。重なり判定を全ドミノ総当たりにしないため
+   * グリッドは時間が進むか、ドミノが増減したら作り直す
+   */
+  near(x, z) {
+    if (this._gridT !== this.time || this._gridN !== this.list.size || this._gridDirty) {
+      const G = (this._grid = new Map());
+      for (const d of this.list) {
+        const t = d.body.translation();
+        const k = `${Math.floor(t.x / 1.5)},${Math.floor(t.z / 1.5)}`;
+        let c = G.get(k); if (!c) G.set(k, (c = [])); c.push(d);
+      }
+      this._gridT = this.time; this._gridN = this.list.size; this._gridDirty = false;
+    }
+    const cx = Math.floor(x / 1.5), cz = Math.floor(z / 1.5), out = [];
+    for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) { const c = this._grid.get(`${cx + i},${cz + j}`); if (c) for (const d of c) out.push(d); }
+    return out;
+  }
+  /** 固定剛体を動的に戻す（つかむとき・どかすとき） */
+  unfreeze(d) {
+    if (!d.frozen) return;
+    d.body.setBodyType(R.RigidBodyType.Dynamic, true);
+    d.frozen = false;
+    d.collider.setCollisionGroups(d.held ? G_HELD : G_NORMAL);
+    d.body.wakeUp();
+  }
+  /** 手で持つ／離す：持っている間は固定ドミノをすり抜ける */
+  setHeld(d, on) {
+    d.held = on;
+    d.collider.setCollisionGroups(on ? G_HELD : d.frozen ? G_FIXED : G_NORMAL);
+    if (!on) {
+      // 離した所で固定ドミノと重なっていたら、そのドミノを動的に戻して物理的に押しのけ合わせる
+      const t = d.body.translation();
+      for (const o of this.near(t.x, t.z)) {
+        if (o === d || !o.frozen) continue;
+        const u = o.body.translation();
+        if ((u.x - t.x) ** 2 + (u.z - t.z) ** 2 < 0.9 * 0.9 && Math.abs(u.y - t.y) < 1.1) this.unfreeze(o);
+      }
+    }
   }
 
   /** 剛体に衝撃を与える（押す・ぶつかる） */

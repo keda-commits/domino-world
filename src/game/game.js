@@ -477,18 +477,18 @@ export class Game {
   unbuiltCount() { return this.unbuiltList().filter((s) => !s.domino).length; }
   loosePlannedNeed() { return 0; }
   frontSlot() { return this.unbuiltList().find((s) => !s.domino) || null; }
-  machineTarget() { return this.unbuiltList().find((s) => !s.domino && (!s.claim || s.claim === -1)) || null; }
+  machineTarget() { return this.unbuiltList().find((s) => !s.domino && (!s.claim || s.claim === -1) && !this.slotBlocker(s)) || null; }
   nextUnbuiltNear(slot) {
     const seg = slot.seg; if (!seg || !seg.slots) return null;
     const n = seg.slots[slot.i + 1];
-    return n && !n.domino && !n.claim ? n : null;
+    return n && !n.domino && !n.claim && !this.slotBlocker(n) ? n : null;
   }
   findBuildJob(gnome) {
     if (this.mode !== 'build') return null;
     const list = this.unbuiltList();
     let best = null, bd = Infinity, k = 0;
     for (const s of list) {
-      if (s.domino || s.claim) continue;
+      if (s.domino || s.claim || this.slotBlocker(s)) continue;
       const d = (s.x - gnome.pos.x) ** 2 + (s.z - gnome.pos.z) ** 2 + k * 4;
       if (d < bd) { bd = d; best = s; }
       if (++k > 14) break;
@@ -511,8 +511,37 @@ export class Game {
   returnToStock(n) { this.stock += n; }
 
   /** スロットにドミノを置く（手持ち・機械から。在庫は呼び出し側で減らしてある） */
+  /**
+   * マスの上を物理的にふさいでいる別のドミノ（あれば返す）
+   * 立っているもの：中心がマスに近い／倒れているもの：長辺（寝ている向き）がマスの上を横切っている
+   */
+  slotBlocker(slot, ignore = null) {
+    for (const d of this.dominoes.near(slot.x, slot.z)) {
+      if (d === ignore || d.removed) continue;
+      if (d === slot.domino && !ignore) continue;
+      const t = d.body.translation();
+      const dx = slot.x - t.x, dz = slot.z - t.z;
+      if (dx * dx + dz * dz > 1.1 || t.y > 1.6) continue;
+      if (!d.toppled && this.dominoes.upY(d) > 0.9) { if (dx * dx + dz * dz < 0.36 * 0.36) return d; continue; }
+      // 寝ている：ドミノの長軸（ローカルY）を水平面に落として、マス中心との距離を見る
+      const r = d.body.rotation();
+      let ax = 2 * (r.x * r.y - r.w * r.z), az = 2 * (r.y * r.z + r.w * r.x);
+      const len = Math.hypot(ax, az);
+      const half = (CFG.dominoH / 2) * Math.min(1, len);
+      if (len > 1e-3) { ax /= len; az /= len; }
+      const along = Math.max(-half, Math.min(half, dx * ax + dz * az));
+      const px = dx - ax * along, pz = dz - az * along;
+      if (px * px + pz * pz < (d.w / 2 + 0.12) ** 2) return d;
+    }
+    return null;
+  }
+  /** マスに新しいドミノを立てられるか（ほかのドミノが乗っていない） */
+  slotFree(slot) { return !slot.domino && !this.slotBlocker(slot); }
+
   placeAt(slot, gnome) {
     if (slot.domino) { this.stock++; return null; }
+    // 倒れたドミノなどが残っている所には重ねて立てない（先に回収・復旧が必要）
+    if (this.slotBlocker(slot)) { this.stock++; this.stats.blockedPlacements = (this.stats.blockedPlacements || 0) + 1; return null; }
     const kind = slot.kind === 'wide' ? 'wide' : slot.special ? slot.special.type : 'normal';
     const d = this.dominoes.create(slot, { slot, kind, drop: true, colorIndex: Math.floor(Math.max(0, slot.order) / 4) });
     if (!d) { this.stock++; return null; }
@@ -598,15 +627,17 @@ export class Game {
     if (this.mode !== 'build' && !duringRun) return null;
     const minOrder = duringRun ? (this.run.frontOrder < 0 ? 12 : this.run.frontOrder + 25) : -Infinity;
     let best = null, bd = maxD * maxD;
-    // 倒れているドミノ一覧（手前のドミノが上に倒れ込んでいるスロットは、先にそちらを起こす）
-    const lying = [];
-    for (const e of this.dominoes.list) if (e.slot && !e.removed && (e.toppled || !this.dominoes.isStandingAt(e, e.slot))) { const t = e.body.translation(); lying.push({ e, x: t.x, z: t.z, o: this.ord(e.slot) }); }
-    const covered = (d) => { const o = this.ord(d.slot); for (const l of lying) if (l.e !== d && l.o < o && (l.x - d.slot.x) ** 2 + (l.z - d.slot.z) ** 2 < 0.36) return true; return false; };
+    // 別のドミノが上に寝ているマスは後回し（重ねて立てない）。ただしお互いの上に寝ている場合は順番の早い方から
+    const covered = (d) => {
+      const b = this.slotBlocker(d.slot, d);
+      if (!b) return false;
+      if (b.slot && b.slot !== d.slot && this.slotBlocker(b.slot, b) === d) return this.ord(d.slot) > this.ord(b.slot);
+      return true;
+    };
     for (const d of this.dominoes.list) {
       if (!d.slot || d.claim || d.removed || d.held) continue;
       // 倒れた・寄りかかって傾いた・ずれたドミノ（スロットにきちんと立っていない）
       if (!d.toppled && this.dominoes.isStandingAt(d, d.slot)) continue;
-      if (covered(d)) continue;
       if (duringRun && (d.slot.order < minOrder || this.run.toppled.has(d))) continue;
       if (!this.isStill(d)) continue; // 倒れている最中は待つ（寄りかかって止まったものは対象）
       const t = d.body.translation();
@@ -615,7 +646,8 @@ export class Game {
       let dd = (t.x - gnome.pos.x) ** 2 + (t.z - gnome.pos.z) ** 2;
       if (preferAccident && d.accident) dd *= 0.3;
       dd += Math.max(0, d.slot.order) * 0.02;
-      if (dd < bd) { bd = dd; best = d; }
+      // 重なりの確認は、いまの候補より近いものだけ（重い判定を全ドミノに対してしない）
+      if (dd < bd && !covered(d)) { bd = dd; best = d; }
     }
     if (best) best.claim = gnome.id;
     return best;
@@ -626,7 +658,7 @@ export class Game {
     const minOrder = this.run.frontOrder + 30;
     let best = null, bd = Infinity;
     for (const s of this.course.allSlots) {
-      if (s.domino || s.claim || s.order < minOrder) continue;
+      if (s.domino || s.claim || s.order < minOrder || this.slotBlocker(s)) continue;
       const d = (s.x - gnome.pos.x) ** 2 + (s.z - gnome.pos.z) ** 2 + (s.order - minOrder) * 0.5;
       if (d < bd) { bd = d; best = s; }
     }
@@ -637,6 +669,8 @@ export class Game {
     if (d.removed || !d.slot) return;
     if (this.mode === 'run' && this.run && (this.run.frontOrder + 6 > d.slot.order)) return;
     const slot = d.slot;
+    // マスの上に別のドミノが寝ていたら、重ねて立て直さない
+    if (this.slotBlocker(slot, d)) return null;
     const kind = slot.kind === 'wide' ? 'wide' : slot.special ? slot.special.type : 'normal';
     const color = d.color;
     this.dominoes.remove(d);
@@ -644,14 +678,63 @@ export class Game {
     slot.domino = nd;
     this.stats.restands++;
     if (!this._lastRestSnd || this.time - this._lastRestSnd > 0.07) { this.audio.place(); this._lastRestSnd = this.time; }
+    return nd;
   }
+  /** このドミノが、どこかの空いたマス（またはほかのドミノのマス）をふさいでいるか */
+  blocksASlot(d) {
+    const t = d.body.translation();
+    const sl = this.nearestSlot(t.x, t.z, 0.9);
+    return !!sl && sl !== d.slot && this.slotBlocker(sl, sl.domino && sl.domino !== d ? sl.domino : null) === d;
+  }
+  /**
+   * 片付けジョブ：建設したいマスをふさいでいる「持ち主のいない（または自分のマスから大きく外れた）」ドミノ
+   * 建設担当・復旧係が拾って在庫に戻す → その後で通常どおり建設・立て直しされる
+   */
+  findClearJob(gnome) {
+    if (this.mode !== 'build') return null;
+    let best = null, bd = Infinity;
+    for (const d of this.dominoes.list) {
+      if (d.claim || d.removed || d.held || !this.isStill(d)) continue;
+      if (d.releasedAt != null && this.time - d.releasedAt < 12) continue; // 手で置いたばかりのものは少し待つ
+      const t = d.body.translation();
+      if (d.slot && (t.x - d.slot.x) ** 2 + (t.z - d.slot.z) ** 2 <= CFG.restandDistance ** 2) continue; // 自分のマスの近く → 立て直しで直る
+      if (!this.blocksASlot(d)) continue;
+      const dd = (t.x - gnome.pos.x) ** 2 + (t.z - gnome.pos.z) ** 2;
+      if (dd < bd) { bd = dd; best = d; }
+    }
+    if (best) best.claim = gnome.id;
+    return best;
+  }
+  /** 復旧：建設の先頭より手前で空いてしまったマス（手で抜いた・吸い込まれた等）。物理的に空いているものだけ */
+  findGapJob(gnome) {
+    if (this.mode !== 'build' || this.stock + this.crate.count <= 0) return null;
+    // 一番先まで建っているドミノより手前の空き（＝途中の抜け）
+    let fo = -1;
+    for (const s of this.course.allSlots) if (s.domino && s.order > fo) fo = s.order;
+    let best = null, bd = Infinity;
+    for (const s of this.unbuiltList()) {
+      if (s.order < 0 || s.order >= fo) continue;
+      if (s.domino || s.claim || this.slotBlocker(s)) continue;
+      const d = (s.x - gnome.pos.x) ** 2 + (s.z - gnome.pos.z) ** 2;
+      if (d < bd) { bd = d; best = s; }
+    }
+    if (best) best.claim = gnome.id;
+    return best;
+  }
+  /** 重なりの解消（拾って在庫へ） */
+  clearBlocker(d) {
+    if (d.removed) return;
+    this.collect(d); this.stock++;
+    this.stats.overlapsCleared = (this.stats.overlapsCleared || 0) + 1;
+  }
+
   /** スロットから離れた・持ち主のいないドミノ */
   findCollectJob(gnome) {
     if (this.mode !== 'build') return null;
     let best = null, bd = Infinity;
     for (const d of this.dominoes.list) {
       if (d.claim || d.removed || d.held) continue;
-      if (!d.slot && d.releasedAt != null && this.time - d.releasedAt < 12) continue; // プレイヤーが置いたばかりのものは片付けない
+      if (!d.slot && d.releasedAt != null && this.time - d.releasedAt < 12 && !this.blocksASlot(d)) continue; // プレイヤーが置いたばかりのものは片付けない（マスをふさいでいれば片付ける）
       let loose = !d.slot;
       if (d.slot && !this.dominoes.isStandingAt(d, d.slot) && this.isStill(d)) {
         const t = d.body.translation();
@@ -691,18 +774,33 @@ export class Game {
   /** 「片付け」ボタン：倒れたドミノを順番に起こす */
   manualRestoreStep() {
     if (this.mode !== 'build') return false;
-    let best = null, bo = Infinity;
+    // 起こす候補：自分のマスの近くで倒れている・ずれているドミノ（順番の早いものから）
+    const cands = [];
     for (const d of this.dominoes.list) {
-      if (!d.slot || d.claim || d.removed) continue;
+      if (!d.slot || d.claim || d.removed || d.held) continue;
       if (!d.toppled && this.dominoes.isStandingAt(d, d.slot)) continue;
       if (!this.isStill(d)) continue;
       const t = d.body.translation();
       if ((t.x - d.slot.x) ** 2 + (t.z - d.slot.z) ** 2 > CFG.restandDistance ** 2) { this.collect(d); this.stock++; return true; }
-      const o = this.ord(d.slot);
-      if (o < bo) { bo = o; best = d; }
+      cands.push(d);
     }
-    if (!best) return false;
-    this.restand(best);
+    if (!cands.length) {
+      // マスをふさいでいる持ち主のいないドミノ（手で置いた・転がってきた）を片付ける
+      for (const d of this.dominoes.list) if (!d.slot && !d.held && !d.claim && this.isStill(d) && this.blocksASlot(d)) { this.clearBlocker(d); return true; }
+      return false;
+    }
+    cands.sort((a, b) => this.ord(a.slot) - this.ord(b.slot));
+    for (const d of cands) {
+      const b = this.slotBlocker(d.slot, d);
+      if (!b) { if (this.restand(d)) return true; continue; }
+      // 上に寝ているのが持ち主のいないドミノなら片付ける
+      if (!b.slot && !b.held) { this.clearBlocker(b); return true; }
+    }
+    // 全部がお互いの上に寝ていて立てられない → 一番後ろの1枚を在庫に戻して、重なりを解く
+    const last = cands[cands.length - 1];
+    if (last.slot && last.slot.domino === last) last.slot.domino = null;
+    this.clearBlocker(last);
+    this.unbuiltDirty = true;
     return true;
   }
 
@@ -1408,6 +1506,8 @@ export class Game {
       if (!this.course.allSlots.includes(s)) continue;
       if (s.domino && (!standing || !this.dominoes.isStandingAt(s.domino, s))) { this.dominoes.remove(s.domino); s.domino = null; if (!standing) this.stock++; }
       if (standing && !s.domino) {
+        // 重なって立たないよう、上に寝ている持ち主のいないドミノは在庫へ
+        for (let b = this.slotBlocker(s), n = 0; b && n < 4; b = this.slotBlocker(s), n++) { if (b.slot && b.slot !== s && this.course.allSlots.includes(b.slot)) { b.slot.domino = null; } this.dominoes.remove(b); this.stock++; }
         const kind = s.kind === 'wide' ? 'wide' : s.special ? s.special.type : 'normal';
         s.domino = this.dominoes.create(s, { slot: s, kind, colorIndex: Math.floor(Math.max(0, s.order) / 4) });
         made++;
@@ -1437,7 +1537,18 @@ export class Game {
     if (this.run && this.run.pendingCps.length) for (const cp of [...this.run.pendingCps]) this.onCheckpoint(cp);
     this.goal.update(dt);
     for (const p of this.pieces) p.update(dt);
-    for (const cp of this.checkpoints) cp.update(dt);
+    for (const cp of this.checkpoints) {
+      cp.update(dt);
+      if (this.mode === 'build' && cp.paddle.angle() > 0.4) {
+        cp.idleDown = (cp.idleDown || 0) + dt;
+        if (cp.idleDown > 3) {
+          const pb = cp.paddle.base.translation();
+          // 板の上・まわりに倒れたドミノ（または手で置いたもの）が残っている間は起こさない。正しく立っているドミノは邪魔にならない
+          const busy = [...this.dominoes.list].some((d) => { if (d.held || (d.slot && this.dominoes.isStandingAt(d, d.slot))) return false; const t = d.body.translation(); return (t.x - pb.x) ** 2 + (t.z - pb.z) ** 2 < 1.2 * 1.2 && t.y < 1.4; });
+          if (!busy) { cp.reset(); cp.idleDown = 0; }
+        }
+      } else cp.idleDown = 0;
+    }
     for (const s of this.stoppers) s.update(dt);
     if (this.roomba) this.roomba.update(dt, this);
     for (const th of this.threats || []) th.update(dt);

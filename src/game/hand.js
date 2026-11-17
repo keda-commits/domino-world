@@ -43,21 +43,22 @@ export class Hand {
     const g = this.game;
     const c = [];
     const dh = this.pickDomino(ray);
-    if (dh) c.push({ type: 'domino', d: dh.d, point: dh.point, dist: ray.ray.origin.distanceTo(dh.point) });
+    if (dh) c.push({ type: 'domino', d: dh.d, point: dh.point, dist: dh.dist, stack: dh.stack, stackPos: dh.stackPos });
     const eh = g.grabbables ? g.grabbables.pick(ray) : null;
     if (eh) {
       // 資材箱の中のドミノ（見えている小さなドミノ）をつかんだら1枚取り出す。縁・旗なら箱ごと運ぶ
       if (eh.entry === g.crateEntry && g.crate.minis.includes(eh.object) && g.crate.count > 0) c.push({ type: 'supply', supply: 'crate', point: eh.point, dist: eh.dist });
-      else c.push({ type: 'entry', entry: eh.entry, point: eh.point, dist: eh.dist });
+      else c.push({ type: 'entry', entry: eh.entry, point: eh.point, dist: eh.dist, soft: eh.entry.kind === 'worker' || eh.entry.kind === 'threat' });
     }
     const dep = g.depots.map((d) => d.mesh);
     const hd = ray.intersectObjects(dep, true).find((x) => x.object.visible);
     if (hd) c.push({ type: 'supply', supply: g.stock > 0 ? 'depot' : 'empty', point: hd.point, dist: hd.distance });
     if (!c.length) return null;
     c.sort((a, b) => a.dist - b.dist);
-    // ドミノは小さいので少しだけ優先（ほぼ同じ距離なら後ろのものよりドミノ）
+    // ドミノは小さいので優先：ほぼ同じ距離ならドミノ。人やネズミの「つかみやすくする透明な筒」よりは、筒の中のドミノを優先
     const d = c.find((x) => x.type === 'domino');
-    return d && d.dist <= c[0].dist + 0.3 ? d : c[0];
+    if (d) { const first = c[0]; if (first === d || d.dist <= first.dist + (first.soft ? 1.0 : 0.3)) return d; }
+    return c[0];
   }
   /** カーソルを合わせたものの足元に輪を出す（つかめる目印） */
   highlight(h) {
@@ -188,12 +189,23 @@ export class Hand {
   pickDomino(ray) {
     const mesh = this.dominoes.mesh;
     const hits = ray.intersectObject(mesh, false);
+    // レイが通るドミノを手前から（同じドミノは1回）。最初の当たりの近くにあるものは「重なり」
+    const seen = new Set(), list = [];
     for (const h of hits) {
       const d = this.dominoes.byIdx.get(h.instanceId);
-      if (d && !d.removed) return { d, point: h.point };
+      if (!d || d.removed || seen.has(d)) continue;
+      seen.add(d); list.push({ d, point: h.point, dist: h.distance });
     }
-    return null;
+    if (!list.length) return null;
+    const stack = list.filter((x) => x.point.distanceTo(list[0].point) < 0.8);
+    // 重なりの中で選ぶ：Tab で切り替え（同じ場所にカーソルがある間は保持）
+    const key = stack.map((x) => x.d.id).sort().join(',');
+    if (key !== this.stackKey) { this.stackKey = key; this.stackIdx = 0; }
+    const pick = stack[this.stackIdx % stack.length];
+    return { d: pick.d, point: pick.point, dist: pick.dist, stack: stack.length, stackPos: (this.stackIdx % stack.length) + 1 };
   }
+  /** 重なっているドミノの選択を次へ（Tab） */
+  cycleStack() { this.stackIdx = (this.stackIdx || 0) + 1; }
   /** レイの先にある資材置き場 */
   pickSupply(ray) {
     const g = this.game;
@@ -210,13 +222,17 @@ export class Hand {
   grab(d, point) {
     const g = this.game;
     if (this.held) this.release();
+    const st0 = this.dominoes.stateOf(d);
     if (d.slot && d.slot.domino === d && !d.toppled) g.onHandGrab && g.onHandGrab(d);
     if (d.slot && d.slot.domino === d) { d.slot.domino = null; g.unbuiltDirty = true; }
     d.slot = null; d.claim = null; d.accident = false; d.byRoomba = false;
     const b = d.body;
-    if (d.frozen) { b.setBodyType(R.RigidBodyType.Dynamic, true); d.frozen = false; }
+    this.dominoes.unfreeze(d); // 倒れて固定剛体になっていても、動的な剛体に戻してから持つ
+    this.dominoes.wakeAbove(d); // 上に寝ているドミノは支えがなくなるので落ちる
     b.setGravityScale(0, true); b.wakeUp();
-    d.toppled = false; d.standing = false; d.held = true;
+    d.toppled = false; d.standing = false; this.dominoes.setHeld(d, true);
+    g.stats.grabByState = g.stats.grabByState || {};
+    g.stats.grabByState[st0] = (g.stats.grabByState[st0] || 0) + 1;
     // 今の向きから、ヨー（水平の向き）と傾きを読み取る（持ち上げた瞬間にくるっと回らないように）
     const r = b.rotation(); this._q.set(r.x, r.y, r.z, r.w);
     this._e.setFromQuaternion(this._q, 'YXZ');
@@ -326,7 +342,7 @@ export class Hand {
     const av = b.angvel();
     const k = sp > 4 ? 0.6 : 0.1;
     b.setAngvel({ x: av.x * k, y: av.y * k, z: av.z * k }, true);
-    d.held = false;
+    this.dominoes.setHeld(d, false);
     d.releasedAt = this.game.time;
     d.thrown = sp > 4;
     if (d.thrown) this.game.stats.throws = (this.game.stats.throws || 0) + 1;
@@ -338,7 +354,7 @@ export class Hand {
   flick(d, point) {
     if (!d || d.removed || d.held) return;
     const b = d.body;
-    if (d.frozen) { b.setBodyType(R.RigidBodyType.Dynamic, true); d.frozen = false; }
+    this.dominoes.unfreeze(d);
     b.wakeUp();
     const dir = this._v.copy(point).sub(this.camera.position); dir.y = 0; dir.normalize();
     const t = b.translation();

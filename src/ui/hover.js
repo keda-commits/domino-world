@@ -32,13 +32,8 @@ function describeDomino(game, d) {
   const b = d.body, lv = b.linvel();
   const moving = Math.hypot(lv.x, lv.y, lv.z) > 0.4;
   const kindName = { normal: 'ドミノ', wide: '幅広ドミノ（中間ゴール用）', present: 'プレゼントドミノ', clover: '四つ葉ドミノ' }[d.kind] || 'ドミノ';
-  let state;
-  if (d.held) state = 'つかまれている';
-  else if (moving) state = '動いている';
-  else if (d.toppled) state = '倒れている';
-  else if (d.slot && game.dominoes.isStandingAt(d, d.slot)) state = '立っている（設計図どおり）';
-  else if (game.dominoes.upY(d) > 0.95) state = d.slot ? '立っている（少しずれている）' : '立っている（設計図の外）';
-  else state = '傾いている';
+  const ST = { held: 'つかまれている', repair: '人が回収・修復に向かっている', standing: '立っている（設計図どおり）', offslot: '立っている（マスの外・ずれ）', fallen: '倒れている', fixed: '倒れて止まっている（固定）', buried: 'ほかのドミノの下敷き' };
+  let state = moving && !d.held ? '動いている' : ST[game.dominoes.stateOf(d)];
   const total = game.course.allSlots.length;
   const rows = [['状態', state], ['位置', d.slot && d.slot.order >= 0 ? `${d.slot.order + 1} / ${total} 番目` : '設計図の外（拾われると在庫へ）']];
   const eff = { wide: '連鎖で横の装置を動かす', present: '連鎖で倒すとガチャ券', clover: '連鎖で倒すと次のガチャの選択肢が増える' }[d.kind];

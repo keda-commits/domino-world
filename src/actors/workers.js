@@ -121,6 +121,8 @@ export class Gnome {
     const g = this.game;
     // 倒れたドミノの立て直し（建設がない時も）
     if (this.load === 0) {
+      const cl = g.findClearJob(this);
+      if (cl) return this.doClear(cl);
       const rd = g.findRestandJob(this, 6);
       if (rd) return this.doRestand(rd);
       if (g.unbuiltCount() === 0) {
@@ -162,15 +164,27 @@ export class Gnome {
     });
   }
 
+  /** マスをふさいでいるドミノを拾って片付ける（重なりの解消） */
+  doClear(d) {
+    const g = this.game;
+    this.job = d;
+    this.goto(() => { if (d.removed) return this.pos; const t = d.body.translation(); return tmp.set(t.x, 0, t.z); }, () => {
+      if (d.removed || d.claim !== this.id || d.held) { this.releaseJob(); return this.think(); }
+      this.act(CFG.pickTime / this.speed, 'pick', () => { this.releaseJob(); g.clearBlocker(d); this.think(); });
+    });
+  }
   doRestand(d) {
     const g = this.game;
     this.job = d;
     const fast = this.role === 'restorer' ? (g.evolved('stopperHQ') ? 2.6 : 1.6) : 1;
-    this.goto(() => g.sideOf(d.slot, this.side, tmp), () => {
-      if (d.removed || d.claim !== this.id) { this.releaseJob(); return this.think(); }
+    const slot = d.slot;
+    // 向かっている途中にプレイヤーがつかんだ・別の人が片付けた場合は、そのマスの横で止まって考え直す
+    this.goto(() => g.sideOf(d.slot || slot, this.side, tmp), () => {
+      if (d.removed || d.claim !== this.id || d.held || !d.slot) { this.releaseJob(); return this.think(); }
       this.face(d.slot);
       this.act(CFG.restandTime / (this.speed * fast), 'pick', () => {
         this.releaseJob();
+        if (d.removed || d.held || !d.slot) return this.think();
         g.restand(d, this);
         if (this.role === 'restorer' && Math.random() < 0.15) this.say('復旧完了！');
         this.think();
@@ -258,6 +272,8 @@ export class Gnome {
   // ---------- 復旧係 ----------
   thinkRestorer() {
     const g = this.game;
+    const cl = g.findClearJob(this);
+    if (cl) return this.doClear(cl);
     const rd = g.findRestandJob(this, Infinity, true);
     if (rd) return this.doRestand(rd);
     const lo = g.findCollectJob(this);
@@ -269,6 +285,20 @@ export class Gnome {
       });
     }
     if (this.load > 0) { const dep = g.nearestDepot(this.pos); return this.goto(() => dep.spot(this.id, tmp), () => { g.returnToStock(this.load); this.load = 0; this.think(); }); }
+    // 手前で空いたマスを埋める（抜いたドミノの復旧）
+    const gap = g.findGapJob(this);
+    if (gap) {
+      this.job = gap;
+      return this.goto(() => g.sideOf(gap, this.side, tmp), () => {
+        if (gap.domino || gap.claim !== this.id || g.slotBlocker(gap)) { this.releaseJob(); return this.think(); }
+        this.face(gap);
+        this.act(CFG.placeTime / (this.speed * 1.4), 'place', () => {
+          this.releaseJob();
+          if (!gap.domino) { if (g.crate.count > 0 && g.crate.pos.distanceTo(this.pos) < 10) g.crate.count--; else if (g.stock > 0) g.stock--; else return this.think(); g.placeAt(gap, null); }
+          this.think();
+        });
+      });
+    }
     this.goto(() => this.home, () => this.wait(1.5, Math.random() < 0.3 ? 'salute' : 'idle'));
   }
 

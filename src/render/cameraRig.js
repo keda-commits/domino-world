@@ -138,6 +138,8 @@ export class CameraRig {
     this.emit();
   }
   reset(ctx) { this.setView('build', ctx); }
+  /** 進行中の移動をすぐに終点へ */
+  finishFly() { const f = this.fly; if (!f) return; this.camera.position.copy(f.p1); this.controls.target.copy(f.t1); this.fly = null; this.controls.update(); }
 
   startRun() { this.clearInput(); this.runLock = true; this.runView = 'chase'; this.view = 'chain'; this.smoothFront = null; this.chaseSide = null; this.controls.enabled = false; this.fly = null; this.emit(); }
   endRun() { this.runLock = false; this.controls.enabled = true; this.clearInput(); this.emit(); }
