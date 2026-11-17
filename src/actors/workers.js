@@ -295,7 +295,7 @@ export class Gnome {
     if (this.load === 0) {
       // 工場のドミノ箱にたまっていたら取りに行く（工場で作ったドミノが運ばれて使われるまでが見える）
       const fac = g.factory;
-      if (fac && g.level('factory') > 0 && fac.box >= Math.min(6, this.capacity) && !g.workers.list.some((o) => o !== this && o.job === fac)) {
+      if (fac && g.level('factory') > 0 && fac.box >= Math.min(6, this.capacity) && g.workers.list.filter((o) => o !== this && o.job === fac).length < Math.floor(fac.box / Math.max(1, this.capacity))) {
         this.job = fac;
         return this.goto(() => fac.boxPos(tmp), () => {
           const take = fac.take(this.capacity);

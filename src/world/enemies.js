@@ -273,7 +273,7 @@ export class RunawayCar {
         this.arrow.rotation.z = -Math.atan2(this.dir.x, this.dir.z);
         this.arrow.material.opacity = 0.25 + Math.abs(Math.sin(this.timer * 10)) * 0.3;
         this.group.position.y = Math.abs(Math.sin(this.timer * 40)) * 0.04;
-        if (this.timer <= 0) { this.arrow.material.opacity = 0; this.state = 'drive'; this.speed = this.def.speed || 13; this.driveT = 0; this.bounces = 0; }
+        if (this.timer <= 0) { this.arrow.material.opacity = 0; this.state = 'drive'; this.speed = this.def.speed || 13; this.driveT = 0; this.bounces = 0; this.body.setTranslation({ x: this.pos.x, y: 0.3, z: this.pos.z }, true); }
         break;
       }
       case 'drive': {
@@ -314,7 +314,7 @@ export class RunawayCar {
       }
     }
   }
-  hideBody() { this.body.setNextKinematicTranslation({ x: this.pos.x, y: -5, z: this.pos.z }); }
+  hideBody() { this.body.setTranslation({ x: this.pos.x, y: -5, z: this.pos.z }, true); }
   /** スポンジ弾・押し返しは速すぎて効かない（バリケードで止める敵） */
   repel() { return false; }
   describe() {

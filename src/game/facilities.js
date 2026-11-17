@@ -56,24 +56,46 @@ export class Crate {
   }
   spot(id, out) { const a = (id * 2.399) % (Math.PI * 2); return out.set(this.pos.x + Math.cos(a) * 1.6, 0, this.pos.z + Math.sin(a) * 1.4); }
   take(n) { const t = Math.min(n, this.count); this.count -= t; return t; }
-  syncCollider() { this.body.setNextKinematicTranslation({ x: this.pos.x, y: this.pos.y, z: this.pos.z }); this.body.setNextKinematicRotation(this.game.physics.quatYaw(this.group.rotation.y)); }
+  /**
+   * 当たり判定：止まって置かれている間だけ有効。動いている（自動移動・運ばれている）間は床の下へ退避し、
+   * 置かれた瞬間に「瞬間移動」で合わせる（速度を持って掃くとドミノをはね飛ばすため）
+   */
+  syncCollider(force = false) {
+    const active = !this.moving && !this.carried;
+    if (active && (force || !this.colliderOn)) {
+      this.body.setTranslation({ x: this.pos.x, y: this.pos.y, z: this.pos.z }, true);
+      this.body.setRotation(this.game.physics.quatYaw(this.group.rotation.y), true);
+    } else if (!active && this.colliderOn) this.body.setTranslation({ x: this.pos.x, y: -5, z: this.pos.z }, true);
+    this.colliderOn = active;
+  }
+  /** 自動移動の行き先：建設の先頭の横で、ドミノの列から十分離れた所 */
+  restSpot(front, out) {
+    const g = this.game;
+    const ok = (p) => !g.stage.blocked(p.x, p.z, 1.4) && g.stage.inBounds(p.x, p.z, 1.2) && (!g.nav || g.nav.free(g.nav.idx(p.x, p.z), 3));
+    for (const side of [3.2, -3.2, 4.2, -4.2]) { g.sideOf(front, side, out); if (ok(out)) return out; }
+    return null;
+  }
   update(dt) {
     const g = this.game;
     this.cap = 60 + 30 * g.level('basket') + (g.level('train') ? 60 : 0);
     const front = g.frontSlot();
     // プレイヤーが運んで置いたら、その場所に固定（建設の先頭を追わない）
-    if (front && !this.pinned && !this.carried) {
-      const tgt = g.sideOf(front, 3.2, this._v);
-      // 置けない場所なら反対側
-      if (g.stage.blocked(tgt.x, tgt.z, 1.4) || !g.stage.inBounds(tgt.x, tgt.z, 1.2)) g.sideOf(front, -3.2, tgt);
-      const d = this.pos.distanceTo(tgt);
+    const tgt = front && !this.pinned && !this.carried ? this.restSpot(front, this._v) : null;
+    if (tgt) {
+      const d = Math.hypot(tgt.x - this.pos.x, tgt.z - this.pos.z);
       if (d > 6) this.moving = true;
       if (this.moving) {
-        const step = Math.min(d, 8 * g.odMult() * dt);
-        if (d > 1e-3) this.pos.addScaledVector(tgt.sub(this.pos).normalize(), step);
-        if (d < 0.1) this.moving = false;
+        // ドミノの列・家具をよけて移動（貫通しない）。道がなければその場で待つ
+        this.pf ||= new PathFollower(2);
+        const wp = g.nav && d > 1.5 ? this.pf.next(g.nav, this.pos, tgt, g.time) : tgt;
+        if (wp) {
+          const sx = wp.x - this.pos.x, sz = wp.z - this.pos.z, sd = Math.hypot(sx, sz);
+          const step = Math.min(sd, 8 * g.odMult() * dt);
+          if (sd > 1e-3) { this.pos.x += (sx / sd) * step; this.pos.z += (sz / sd) * step; }
+        }
+        if (d < 0.1) { this.moving = false; this.pf.reset(); }
       }
-    }
+    } else if (this.moving) this.moving = false;
     if (!this.carried) this.pos.y = g.stage.heightAt(this.pos.x, this.pos.z);
     this.syncCollider();
     const show = Math.min(24, Math.ceil(this.count / Math.max(1, this.cap / 24)));
@@ -272,7 +294,7 @@ export class Factory {
       while (this.baseAcc >= 1) { this.baseAcc -= 1; g.stock++; g.stats.produced++; }
     }
     // 工場：足りないときだけ動く（歯車が回り、1枚ずつベルトに乗る）
-    this.running = lv > 0 && short && g.mode === 'build' && this.box < 60;
+    this.running = lv > 0 && short && g.mode === 'build';
     if (this.running) {
       this.acc += dt * this.factoryRate() * g.odMult();
       while (this.acc >= 1) { this.acc -= 1; this.spawnItem(); }
@@ -290,7 +312,11 @@ export class Factory {
         const k = Math.min(1, (it.t - 1.6) / 0.25);
         it.m.position.set(6.0 + 0.6 * k, 0.92 - 0.7 * k, 1.0);
         it.m.rotation.z = -k * 1.2;
-        if (k >= 1) { this.group.remove(it.m); this.items.splice(i, 1); this.box++; this.made++; g.stats.produced++; }
+        if (k >= 1) {
+          this.group.remove(it.m); this.items.splice(i, 1); this.made++; g.stats.produced++;
+          // 箱がいっぱい（40枚）なら、工場の滑り台で倉庫へ（製造は止めない）
+          if (this.box >= 40) { g.stock++; this.chuted = (this.chuted || 0) + 1; } else this.box++;
+        }
       }
     }
     // 運搬担当がいないときは、工場の係がゆっくり倉庫へ送る（止まらない保証）

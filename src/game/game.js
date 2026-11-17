@@ -234,7 +234,7 @@ export class Game {
   settleCrate() {
     this.settleOut(this.crate.pos, 1.4);
     this.crate.pos.y = this.stage.heightAt(this.crate.pos.x, this.crate.pos.z);
-    this.crate.syncCollider && this.crate.syncCollider();
+    this.crate.syncCollider && this.crate.syncCollider(true);
   }
   addWorkerGrab(w) {
     if (!this.grabbables) return;
@@ -766,6 +766,7 @@ export class Game {
       if (!d.toppled && this.dominoes.isStandingAt(d, d.slot)) continue;
       if (duringRun && (d.slot.order < minOrder || this.run.toppled.has(d))) continue;
       if (!this.isStill(d)) continue; // 倒れている最中は待つ（寄りかかって止まったものは対象）
+      if (d.restandFailAt && this.time - d.restandFailAt < 4) continue; // さっき起こせなかったもの（同じ所で足踏みしない）
       const t = d.body.translation();
       const dist2s = (t.x - d.slot.x) ** 2 + (t.z - d.slot.z) ** 2;
       if (dist2s > CFG.restandDistance ** 2) continue;
@@ -796,7 +797,15 @@ export class Game {
     if (this.mode === 'run' && this.run && (this.run.frontOrder + 6 > d.slot.order)) return null;
     const slot = d.slot;
     // マスの上に別のドミノが寝ていたら、重ねて立て直さない
-    if (this.slotBlocker(slot, d)) return null;
+    const b = this.slotBlocker(slot, d);
+    if (b) {
+      // 2枚がお互いのマスの上に寝ている（どちらも起こせない）：もう1枚を拾い上げてから起こす。拾った分は在庫へ、マスは空きになる
+      if (b.slot && b.slot !== slot && !b.held && !b.removed && this.slotBlocker(b.slot, b) === d) {
+        const bs = b.slot; this.dominoes.remove(b); if (bs.domino === b) bs.domino = null; this.stock++; this.unbuiltDirty = true;
+        this.stats.untangled = (this.stats.untangled || 0) + 1;
+        if (this.slotBlocker(slot, d)) { d.restandFailAt = this.time; return null; }
+      } else { d.restandFailAt = this.time; return null; }
+    }
     const kind = slot.kind === 'wide' ? 'wide' : slot.special ? slot.special.type : 'normal';
     const color = d.color;
     this.dominoes.remove(d);
