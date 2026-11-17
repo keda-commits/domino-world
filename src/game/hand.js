@@ -90,7 +90,8 @@ export class Hand {
       const t = b.translation(); this.target.set(t.x, t.y, t.z);
     } else {
       h.pos = base.clone(); h.vel = new THREE.Vector3(); h.yaw = e.obj.rotation.y;
-      h.collider = makeCarryCollider(g, e);
+      // 自分の剛体を持つもの（資材箱）は、その剛体がそのまま一緒に動く。ほかは一時的な当たり判定を付ける
+      h.collider = e.ownBody ? null : makeCarryCollider(g, e);
       this.target.copy(base);
     }
     this.heldObj = h;
@@ -137,18 +138,39 @@ export class Hand {
       }
       if (e.mode === 'carry') {
         const prev = h.pos.clone();
-        h.pos.lerp(this.target, Math.min(1, dt * 14));
+        const want = prev.clone().lerp(this.target, Math.min(1, dt * 14));
+        // 壁・家具・設備を貫通しない：重なる方向へは進まず、動ける軸だけ動く（壁に沿って滑る）
+        if (e.foot || e.kind === 'facility') {
+          const prevYaw = e.obj ? e.obj.rotation.y : 0;
+          if (e.obj && h.yaw != null) e.obj.rotation.y = h.yaw;
+          const stuck = g.footBlocked(e, prev.x, prev.z); // もともと重なっている（古いセーブ等）なら抜け出す動きは許す
+          if (!stuck && g.footBlocked(e, want.x, want.z)) {
+            if (!g.footBlocked(e, want.x, prev.z)) want.z = prev.z;
+            else if (!g.footBlocked(e, prev.x, want.z)) want.x = prev.x;
+            else { want.x = prev.x; want.z = prev.z; }
+            if (e.obj && g.footBlocked(e, want.x, want.z)) { e.obj.rotation.y = prevYaw; h.yaw = prevYaw; }
+            this.blockedNote(e, want);
+          }
+        }
+        h.pos.copy(want);
         h.vel.lerp(this._v.copy(h.pos).sub(prev).divideScalar(Math.max(dt, 1e-3)), 0.5);
         e.setPos(h.pos);
         if (e.obj && h.yaw != null) e.obj.rotation.y = h.yaw;
-        h.collider.set(h.pos);
+        if (h.collider) h.collider.set(h.pos);
       }
       this.shadowMark.position.set(this.target.x, floorY + 0.015, this.target.z); this.shadowMark.scale.setScalar(Math.max(1, e.radius * 2)); this.shadowMark.visible = true;
     }
     // 落下中のもの：重力で落ち、床で少し跳ねて止まる
     for (const f of [...this.falling]) {
       f.vel.y -= 45 * dt;
+      const fx = f.pos.x, fz = f.pos.z;
       f.pos.addScaledVector(f.vel, dt);
+      // 投げた・落とした設備も壁や家具を貫通しない（当たった向きの速度を止めて、その場に落ちる）
+      if ((f.entry.foot || f.entry.kind === 'facility') && !g.footBlocked(f.entry, fx, fz) && g.footBlocked(f.entry, f.pos.x, f.pos.z)) {
+        if (!g.footBlocked(f.entry, f.pos.x, fz)) { f.pos.z = fz; f.vel.z = 0; }
+        else if (!g.footBlocked(f.entry, fx, f.pos.z)) { f.pos.x = fx; f.vel.x = 0; }
+        else { f.pos.x = fx; f.pos.z = fz; f.vel.x = 0; f.vel.z = 0; }
+      }
       const b = g.stage.bounds, m = Math.max(0.4, f.entry.radius * 0.6);
       if (f.pos.x < b.minX + m || f.pos.x > b.maxX - m) { f.vel.x *= -0.4; f.pos.x = Math.max(b.minX + m, Math.min(b.maxX - m, f.pos.x)); }
       if (f.pos.z < b.minZ + m || f.pos.z > b.maxZ - m) { f.vel.z *= -0.4; f.pos.z = Math.max(b.minZ + m, Math.min(b.maxZ - m, f.pos.z)); }
@@ -168,6 +190,13 @@ export class Hand {
       }
       f.entry.setPos(f.pos); if (f.collider) f.collider.set(f.pos);
     }
+  }
+  /** 運んでいる物が何かに当たったとき、ときどき短く知らせる */
+  blockedNote(e, p) {
+    const g = this.game;
+    if (this._blkT && g.time - this._blkT < 1.2) return;
+    this._blkT = g.time;
+    g.fx.floatAt(p.clone().setY((p.y || 0) + 1.8), 'ゴツン（ここから先へは入らない）', 'warn', 0.9);
   }
   /** 物理ステップごと：剛体の小物を目標へ（速度制御。ぬいぐるみ等は倒れないようヨーだけ回す） */
   stepObject() {

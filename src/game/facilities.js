@@ -49,7 +49,7 @@ export class Crate {
     this.count = 0;
     this.cap = 60;
     // 資材箱の当たり判定（ドミノや小物がぶつかる。動かすと一緒に動く）
-    this.body = game.physics.world.createRigidBody(R.RigidBodyDesc.kinematicPositionBased().setTranslation(0, -5, 0));
+    this.body = game.physics.world.createRigidBody(R.RigidBodyDesc.kinematicPositionBased().setTranslation(0, 0, 0));
     game.physics.world.createCollider(R.ColliderDesc.cuboid(1.2, 0.38, 0.9).setTranslation(0, 0.38, 0).setFriction(0.6), this.body);
     this._v = new THREE.Vector3();
     this.moving = false;
@@ -61,12 +61,11 @@ export class Crate {
    * 置かれた瞬間に「瞬間移動」で合わせる（速度を持って掃くとドミノをはね飛ばすため）
    */
   syncCollider(force = false) {
-    const active = !this.moving && !this.carried;
-    if (active && (force || !this.colliderOn)) {
-      this.body.setTranslation({ x: this.pos.x, y: this.pos.y, z: this.pos.z }, true);
-      this.body.setRotation(this.game.physics.quatYaw(this.group.rotation.y), true);
-    } else if (!active && this.colliderOn) this.body.setTranslation({ x: this.pos.x, y: -5, z: this.pos.z }, true);
-    this.colliderOn = active;
+    // Ver.0.5.1：床下へ退避して置いた瞬間に戻す方式をやめた（戻した瞬間に重なったドミノを弾き飛ばしていた）。
+    // 当たり判定はいつも箱と一緒に「なめらかに」動く（運ぶ・落とす・自動移動のどれでも）。読み込み時だけ直接合わせる
+    const t = { x: this.pos.x, y: this.pos.y, z: this.pos.z }, q = this.game.physics.quatYaw(this.group.rotation.y);
+    if (force) { this.body.setTranslation(t, true); this.body.setRotation(q, true); }
+    else { this.body.setNextKinematicTranslation(t); this.body.setNextKinematicRotation(q); }
   }
   /** 自動移動の行き先：建設の先頭の横で、ドミノの列から十分離れた所 */
   restSpot(front, out) {

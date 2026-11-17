@@ -155,10 +155,13 @@ export class Game {
     // 経路探索のグリッド（家具・小物・ドミノ）。歩道橋は通路として登録
     this.nav = new NavGrid(this);
     for (const p of this.placed) if (p.type === 'footbridge') this.nav.addBridge(p.a, p.b);
-    else if (this.crate.count === 0 && !this.def.noStartCrate) {
-      // ゲーム開始：建設開始地点近くの資材箱にドミノ50個（在庫から移すので二重計上しない）
+    // ゲーム開始：建設開始地点近くの資材箱にドミノ50個（在庫から「移す」ので総数は増えない）。
+    // 資材箱の中身を保存しているセーブ（grab.crate）では保存された数をそのまま使う（再読み込みで増えない）
+    const savedCrate = data && data.grab && data.grab.crate;
+    if (!savedCrate && this.crate.count === 0 && !this.def.noStartCrate) {
       const n = Math.min(50, this.stock); this.stock -= n; this.crate.count += n;
     }
+    this.crate.syncCollider(true); // 読み込み時だけ位置を直接合わせる（周りにまだ動くドミノはない）
     this.emit('stageLoaded', id);
   }
 
@@ -169,15 +172,15 @@ export class Game {
     this.propEntries = (this.stage.props || []).map((p) => G.add(propEntry(this, p)));
     const notRun = () => this.mode === 'build';
     // 資材箱：中のドミノは1枚ずつ取り出し、縁や旗をつかむと箱ごと運ぶ（運んだ場所に固定され、建設の先頭を追わなくなる）
-    this.crateEntry = G.add(carryEntry(this, { name: '前線の資材箱', kind: 'facility', obj: this.crate.group, radius: 1.5, height: 1.0, canGrab: notRun,
+    this.crateEntry = G.add(carryEntry(this, { name: '前線の資材箱', kind: 'facility', obj: this.crate.group, radius: 1.5, height: 1.0, canGrab: notRun, foot: { hw: 1.2, hd: 0.9 }, ownBody: true,
       getPos: () => this.crate.pos.clone(), setPos: (v) => this.crate.pos.copy(v),
-      onGrab: () => { this.crate.carried = true; this.crate.pinned = true; }, onDrop: () => { this.crate.carried = false; this.settleCrate(); this.navDirty = true; } }));
+      onGrab: () => { this.crate.carried = true; this.crate.pinned = true; }, onDrop: () => { this.crate.carried = false; this.crate.pos.y = this.stage.heightAt(this.crate.pos.x, this.crate.pos.z); this.navDirty = true; } }));
     G.add(carryEntry(this, { name: 'ドミノ自動設置機', kind: 'facility', obj: this.machine.group, radius: 1.6, height: 2.6, canGrab: () => notRun() && this.machineActive() && this.level('machine') > 0,
       getPos: () => this.machine.pos.clone(), setPos: (v) => this.machine.pos.copy(v), onGrab: () => { this.machine.carried = true; }, onDrop: () => { this.machine.carried = false; } }));
     this.trainEntry = G.add(carryEntry(this, { name: '資材運搬トレイン', kind: 'facility', obj: this.train.mesh, radius: 1.6, height: 1.6, canGrab: () => notRun() && this.level('train') > 0,
       getPos: () => this.train.pos.clone(), setPos: (v) => this.train.pos.copy(v), onGrab: () => { this.train.carried = true; }, onDrop: () => { this.train.carried = false; } }));
-    this.factoryEntry = G.add(carryEntry(this, { name: 'ドミノ製造機', kind: 'facility', obj: this.factory.group, radius: 2.6, height: 3.6, canGrab: notRun,
-      getPos: () => this.factory.group.position.clone(), setPos: (v) => this.factory.group.position.copy(v), onDrop: () => { this.settleOut(this.factory.group.position, 2.6); this.navDirty = true; } }));
+    this.factoryEntry = G.add(carryEntry(this, { name: 'ドミノ製造機', kind: 'facility', obj: this.factory.group, radius: 2.6, height: 3.6, canGrab: notRun, foot: { hw: 4.95, hd: 2.1, ox: 2.45 },
+      getPos: () => this.factory.group.position.clone(), setPos: (v) => this.factory.group.position.copy(v), onGrab: () => { this.factory.carried = true; }, onDrop: () => { this.factory.carried = false; this.navDirty = true; } }));
     for (const w of this.workers.list) this.addWorkerGrab(w);
     for (const p of this.placed) this.addPieceGrab(p);
     for (const th of this.threats) {
@@ -220,7 +223,30 @@ export class Game {
     }
     return 0;
   }
-  /** 置いた物が家具・壁にめり込んでいたら、近くの空いている所へずらす */
+  /**
+   * 運んでいる・落下中の物の足元（e.foot の矩形、なければ円）が、壁・家具・ほかの設備に重なるか。
+   * 重なる位置へは動かさない（手の移動で、その手前で止まる・壁に沿って滑る）
+   */
+  footBlocked(e, x, z) {
+    const st = this.stage, yaw = e.obj ? e.obj.rotation.y || 0 : 0;
+    const f = e.foot || { hw: e.radius * 0.7, hd: e.radius * 0.7 };
+    const c = Math.cos(yaw), s = Math.sin(yaw);
+    const pts = [];
+    for (const u of [-1, 0, 1]) for (const v of [-1, 0, 1]) {
+      const lx = (f.ox || 0) + u * f.hw, lz = v * f.hd;
+      pts.push([x + lx * c + lz * s, z - lx * s + lz * c]);
+    }
+    const self = e.obj;
+    const cr = this.crate, fac = this.factory;
+    for (const [px, pz] of pts) {
+      if (!st.inBounds(px, pz, 0.1)) return true;
+      if (st.blocked(px, pz, 0.05, false, true)) return true; // 家具・壁ぎわの物・配置パーツ
+      if (fac && self !== fac.group && this.factoryBlocks(px, pz, 0.05)) return true; // 工場
+      if (cr && self !== cr.group && !cr.carried && Math.abs(px - cr.pos.x) < 1.25 && Math.abs(pz - cr.pos.z) < 0.95) return true; // 資材箱
+    }
+    return false;
+  }
+  /** 置いた物が家具・壁にめり込んでいたら、近くの空いている所へずらす（読み込み時の古いセーブ用） */
   settleOut(pos, r) {
     const st = this.stage;
     const ok = (x, z) => st.inBounds(x, z, r) && !st.blocked(x, z, r * 0.8, false, true);
