@@ -1,3 +1,4 @@
+import { SUCCESS, GRAND, crowd } from './jingles.js';
 // WebAudio だけで作る効果音とオリジナルBGM（外部音源ファイルなし）。
 // 効果音とBGMは別々の音量で調整できる。
 
@@ -38,6 +39,7 @@ export class Audio {
     this.sfxVol = 0.8;
     this.muted = false;
     this.song = 'build';
+    this.jingle = { success: 'A', grand: 'A' }; // 比較した2案のうち採用した方
     this.clickBudget = 0;
     this.lastClickT = 0;
   }
@@ -126,7 +128,7 @@ export class Audio {
   present() { [784, 988, 1175, 1568].forEach((f, i) => this.tone(f, 0.16, 'triangle', 0.13, i * 0.06)); }
   chest() { [523, 659, 784, 1046, 1318, 1568].forEach((f, i) => this.tone(f, 0.22, 'triangle', 0.12, i * 0.07)); }
   bell() { [1318, 1568, 2093].forEach((f, i) => this.tone(f, 1.4, 'sine', 0.12, i * 0.02)); this.tone(659, 1.6, 'sine', 0.1); }
-  goal() { this.bell(); [523, 659, 784, 1046, 784, 1046, 1318].forEach((f, i) => this.tone(f, 0.3, 'square', 0.06, 0.3 + i * 0.12)); }
+  goal() { this.bell(); } // ゴール装置のベル（ファンファーレは連鎖終了時の grandClear）
   magnet(n) { for (let i = 0; i < Math.min(n, 12); i++) this.tone(900 + i * 80, 0.08, 'sine', 0.06, 0.4 + i * 0.05); }
   rewind() { this.tone(1600, 0.6, 'sawtooth', 0.05, 0, 200); for (let i = 0; i < 10; i++) this.tone(2000 - i * 120, 0.03, 'square', 0.04, i * 0.05); }
   toot() { this.tone(587, 0.18, 'square', 0.06); this.tone(740, 0.25, 'square', 0.06, 0.2); }
@@ -139,7 +141,20 @@ export class Audio {
     if (rarity === 'legendary' || rarity === 'epic') this.noiseHit(6000, 0.8, 0.3, 0.8, 0.1, 0.5);
   }
   evolve() { [392, 523, 659, 784, 1046, 1318, 1568, 2093].forEach((f, i) => this.tone(f, 0.4, 'sawtooth', 0.06, i * 0.09)); this.bell(); }
-  fail() { [600, 450, 300].forEach((f, i) => this.tone(f, 0.25, 'triangle', 0.1, i * 0.14)); }
+  /** 旧・失敗音（下がる「テレテン」）は使わない。途中まで倒したのも成果なので success を鳴らす */
+  fail() { this.success(); }
+  /** 曲を鳴らしている間は BGM を少し下げる */
+  duck(sec) {
+    if (!this.music) return;
+    const t = this.ctx.currentTime, g = this.music.gain, v = this.musicVol * 0.5;
+    g.cancelScheduledValues(t); g.setValueAtTime(g.value, t); g.linearRampToValueAtTime(v * 0.25, t + 0.08); g.setValueAtTime(v * 0.25, t + sec); g.linearRampToValueAtTime(v, t + sec + 0.6);
+  }
+  /** 連鎖が止まった（ゴール未到達）：明るい成功ジングル */
+  success() { if (!this.ok) return; const d = SUCCESS[this.jingle.success](this.ctx, this.sfx, this.ctx.currentTime + 0.05); this.duck(d); }
+  /** 最終ゴール到達：大成功のファンファーレ */
+  grandClear() { if (!this.ok) return; const d = GRAND[this.jingle.grand](this.ctx, this.sfx, this.ctx.currentTime + 0.05); this.duck(d); }
+  /** 建設中の事故のあと：観客の「おぉ〜……あぁ〜……」 */
+  crowdAww(size) { if (!this.ok) return; crowd(this.ctx, this.sfx, this.ctx.currentTime + 0.05, size); }
   levelUp() { [523, 659, 784, 1046].forEach((f, i) => this.tone(f, 0.18, 'triangle', 0.12, i * 0.08)); }
 
   /** ルンバの掃除音（距離で音量） */

@@ -5,26 +5,31 @@ import { Dominoes } from '../core/dominoes.js';
 import { Course } from '../core/course.js';
 import { createStage, STAGES } from '../world/stages.js';
 import {
-  GoalBell, LauncherPiece, BridgePiece, Stopper, barricadeMesh, sensorMesh, bellPieceMesh, chestMesh,
+  GoalBell, LauncherPiece, BridgePiece, Stopper, barricadeMesh, footbridgeMesh, sensorMesh, bellPieceMesh, chestMesh,
   gachaMachineMesh, markerMesh, orbMesh, towerMesh, hqMesh, startPadMesh, piggyMesh,
 } from '../world/devices.js';
 import { Roomba } from '../world/roomba.js';
 import { GoalMachine } from '../world/goalMachine.js';
 import { Checkpoint } from '../world/checkpoints.js';
 import { Mouse, RollingBall } from '../world/threats.js';
+import { MischiefRobot, RunawayCar } from '../world/enemies.js';
+import { Darts } from './defense.js';
 import { Grabbables, propEntry, carryEntry, addHitProxy } from './grabbables.js';
+import { NavGrid } from './nav.js';
 import { campMarker, StorageShelf, ROLE_CAMP, SMALL_PARTS } from '../world/camps.js';
 import { Workers } from '../actors/workers.js';
 import { Depot, Crate, Machine, Train, Factory } from './facilities.js';
 import { PlanView } from './planView.js';
 import { Progress, xpForRun } from './progress.js';
-import { PARTS, EVOLUTIONS, CATEGORY } from '../data/parts.js';
+import { PARTS, EVOLUTIONS, CATEGORY, DEFENSE } from '../data/parts.js';
 
 const tmp = new THREE.Vector3();
-const ROLE_PARTS = ['builder', 'carrier', 'collector', 'stopperCrew', 'restorer', 'guard'];
+const ROLE_PARTS = ['builder', 'carrier', 'collector', 'stopperCrew', 'restorer', 'guard', 'soldier'];
 // 配置して使うパーツ：id -> 1レベルあたりの個数
-const PLACEABLE = { minicar: 1, marble: 1, bridge: 1, bell: 1, barricade: 3, sensor: 2 };
-export const PIECE_LABEL = { minicar: 'ミニカー発射台', marble: 'ビー玉スロープ', bridge: '高架橋', bell: '特殊ベル', barricade: 'バリケード', sensor: '接近センサー' };
+const MAP_LAYOUT = 2; // Ver.0.5 で部屋を約20%広げた配置
+const PLACEABLE = { minicar: 1, marble: 1, bridge: 1, bell: 1, barricade: 3, sensor: 2, footbridge: 1 };
+const FOOTBRIDGE_L = 7.5, FOOTBRIDGE_H = 2.0;
+export const PIECE_LABEL = { minicar: 'ミニカー発射台', marble: 'ビー玉スロープ', bridge: '高架橋', bell: '特殊ベル', barricade: 'バリケード', sensor: '接近センサー', footbridge: '歩道橋' };
 
 /**
  * ゲーム全体。ステージ・物理・コース・小人・設備・連鎖・報酬をまとめる。
@@ -57,7 +62,7 @@ export class Game {
     this.physics.onStep((dt) => this.hand && this.hand.step(dt));
     if (this.hand) { this.hand.held = null; this.hand.flying.clear(); }
     this.stage = createStage(id, this.scene, this.physics);
-    this.stage.extraBlockers = [(x, z, m, forRoomba) => this.pieceBlocks(x, z, m, forRoomba)];
+    this.stage.extraBlockers = [(x, z, m, forRoomba, ignoreMovable) => this.pieceBlocks(x, z, m, forRoomba) || (!ignoreMovable && this.factoryBlocks(x, z, m))];
     this.dominoes = new Dominoes(this.scene, this.physics);
     this.dominoes.onTopple = (d) => this.onTopple(d);
     this.course = new Course(this.stage);
@@ -75,7 +80,8 @@ export class Game {
     for (const [k, c] of Object.entries(camps)) if (k !== 'storage') { const m = campMarker(k); m.position.set(c.x, 0, c.z); this.scene.add(m); this.campMeshes.push(m); }
     this.shelf = camps.storage ? new StorageShelf(this.scene, camps.storage) : null;
     if (camps.storage) this.stage.obstacles.push({ x: camps.storage.x, z: camps.storage.z, hw: 3.8, hd: 1.2, yaw: 0, roomba: true, build: true });
-    const fp = camps.machines ? new THREE.Vector3(camps.machines.x, 0, camps.machines.z) : this.depots[0].pos.clone().add(new THREE.Vector3(6, 0, 3));
+    const fs = this.def.factorySpot;
+    const fp = fs ? new THREE.Vector3(fs.x, 0, fs.z) : camps.machines ? new THREE.Vector3(camps.machines.x, 0, camps.machines.z) : this.depots[0].pos.clone().add(new THREE.Vector3(6, 0, 3));
     this.factory = new Factory(this, fp);
     this.workers = new Workers(this);
     this.stoppers = [];
@@ -141,8 +147,14 @@ export class Game {
     this.threats = [];
     if (this.def.mouse) this.threats.push(new Mouse(this, this.def.mouse));
     if (this.def.ball) this.threats.push(new RollingBall(this, this.def.ball));
+    if (this.def.robot) this.threats.push(new MischiefRobot(this, this.def.robot));
+    if (this.def.car) this.threats.push(new RunawayCar(this, this.def.car));
+    this.darts = new Darts(this);
     this.registerGrabbables();
     if (data) this.applyGrabSave(data);
+    // 経路探索のグリッド（家具・小物・ドミノ）。歩道橋は通路として登録
+    this.nav = new NavGrid(this);
+    for (const p of this.placed) if (p.type === 'footbridge') this.nav.addBridge(p.a, p.b);
     else if (this.crate.count === 0 && !this.def.noStartCrate) {
       // ゲーム開始：建設開始地点近くの資材箱にドミノ50個（在庫から移すので二重計上しない）
       const n = Math.min(50, this.stock); this.stock -= n; this.crate.count += n;
@@ -159,22 +171,70 @@ export class Game {
     // 資材箱：中のドミノは1枚ずつ取り出し、縁や旗をつかむと箱ごと運ぶ（運んだ場所に固定され、建設の先頭を追わなくなる）
     this.crateEntry = G.add(carryEntry(this, { name: '前線の資材箱', kind: 'facility', obj: this.crate.group, radius: 1.5, height: 1.0, canGrab: notRun,
       getPos: () => this.crate.pos.clone(), setPos: (v) => this.crate.pos.copy(v),
-      onGrab: () => { this.crate.carried = true; this.crate.pinned = true; }, onDrop: () => { this.crate.carried = false; } }));
-    G.add(carryEntry(this, { name: 'ドミノ自動設置機', kind: 'facility', obj: this.machine.group, radius: 1.6, height: 2.6, canGrab: () => notRun() && this.level('machine') > 0,
+      onGrab: () => { this.crate.carried = true; this.crate.pinned = true; }, onDrop: () => { this.crate.carried = false; this.settleCrate(); this.navDirty = true; } }));
+    G.add(carryEntry(this, { name: 'ドミノ自動設置機', kind: 'facility', obj: this.machine.group, radius: 1.6, height: 2.6, canGrab: () => notRun() && this.machineActive() && this.level('machine') > 0,
       getPos: () => this.machine.pos.clone(), setPos: (v) => this.machine.pos.copy(v), onGrab: () => { this.machine.carried = true; }, onDrop: () => { this.machine.carried = false; } }));
-    G.add(carryEntry(this, { name: '資材運搬トレイン', kind: 'facility', obj: this.train.mesh, radius: 1.6, height: 1.6, canGrab: () => notRun() && this.level('train') > 0,
+    this.trainEntry = G.add(carryEntry(this, { name: '資材運搬トレイン', kind: 'facility', obj: this.train.mesh, radius: 1.6, height: 1.6, canGrab: () => notRun() && this.level('train') > 0,
       getPos: () => this.train.pos.clone(), setPos: (v) => this.train.pos.copy(v), onGrab: () => { this.train.carried = true; }, onDrop: () => { this.train.carried = false; } }));
     this.factoryEntry = G.add(carryEntry(this, { name: 'ドミノ製造機', kind: 'facility', obj: this.factory.group, radius: 2.6, height: 3.6, canGrab: notRun,
-      getPos: () => this.factory.group.position.clone(), setPos: (v) => this.factory.group.position.copy(v) }));
+      getPos: () => this.factory.group.position.clone(), setPos: (v) => this.factory.group.position.copy(v), onDrop: () => { this.settleOut(this.factory.group.position, 2.6); this.navDirty = true; } }));
     for (const w of this.workers.list) this.addWorkerGrab(w);
     for (const p of this.placed) this.addPieceGrab(p);
     for (const th of this.threats) {
       if (th instanceof Mouse && !th.hitProxy) th.hitProxy = addHitProxy(th.group, 0.7, 0.9);
       if (th instanceof Mouse) G.add(carryEntry(this, { name: 'いたずらネズミ', kind: 'threat', obj: th.group, radius: 0.5, height: 0.8, canGrab: () => notRun() && th.state !== 'den',
         getPos: () => th.pos.clone(), setPos: (v) => th.pos.copy(v), onGrab: () => { th.held = true; this.fx.floatAt(th.pos.clone().setY(1.6), 'チュ〜！？', 'warn', 1); }, onDrop: () => { th.held = false; th.startReturn(); } }));
+      if ((th instanceof MischiefRobot || th instanceof RunawayCar) && !th.hitProxy) th.hitProxy = addHitProxy(th.group, th instanceof RunawayCar ? 1.0 : 0.8, th instanceof RunawayCar ? 0.8 : 2.0);
+      if (th instanceof MischiefRobot) G.add(carryEntry(this, { name: 'いたずらロボット', kind: 'threat', obj: th.group, radius: 0.7, height: 2.0, canGrab: notRun,
+        getPos: () => th.pos.clone(), setPos: (v) => th.pos.copy(v), onGrab: () => { th.held = true; th.knock = null; this.fx.floatAt(th.pos.clone().setY(2.4), 'ピピッ！？', 'warn', 1); }, onDrop: () => { th.held = false; th.pos.y = 0; th.stun = 1.2; th.startReturn(); this.stats.robotGrabbed = (this.stats.robotGrabbed || 0) + 1; } }));
+      if (th instanceof RunawayCar) G.add(carryEntry(this, { name: '暴走ミニカー', kind: 'threat', obj: th.group, radius: 0.9, height: 0.8, canGrab: () => notRun() && th.state !== 'drive',
+        getPos: () => th.pos.clone(), setPos: (v) => th.pos.copy(v), onGrab: () => { th.held = true; }, onDrop: () => { th.held = false; th.pos.y = 0; th.arrow.material.opacity = 0; if (th.state === 'warn') { th.state = 'return'; th.pf.reset(); this.stats.carGrabbed = (this.stats.carGrabbed || 0) + 1; this.fx.floatAt(th.pos.clone().setY(1.6), 'ブロロ…（あきらめて車庫へ）', 'coin', 1.6); } } }));
       if (th instanceof RollingBall) G.add({ name: 'ゴムボール', kind: 'threat', obj: th.group, mode: 'body', body: th.body, radius: th.r, height: th.r * 2, canGrab: notRun, getPos: () => th.pos.setY(0), onGrab: () => { th.state = 'rest'; }, onDrop: () => {} });
     }
     if (this.piggy) this.addPiggyGrab();
+  }
+  /** 人がドミノにぶつかった（逃げている・道がなくて直進したとき）：物理的に押して倒す */
+  bumpDominoes(w, dx, dz, sideways = false) {
+    if (this.mode !== 'build') return;
+    for (const d of this.dominoes.near(w.pos.x, w.pos.z)) {
+      if (d.toppled || d.held || d.bumpedBy === w.id) continue;
+      const t = d.body.translation();
+      if ((t.x - w.pos.x) ** 2 + (t.z - w.pos.z) ** 2 > 0.38 * 0.38) continue;
+      d.bumpedBy = w.id;
+      // またいでいて足が当たった：列の横向きに倒れる（1枚だけ。連鎖にはならない）
+      if (sideways && d.slot) { const nx = Math.cos(d.slot.yaw), nz = -Math.sin(d.slot.yaw); const sg = nx * dx + nz * dz >= 0 ? 1 : -1; this.dominoes.push(d, nx * sg, nz * sg, 0.1); }
+      else this.dominoes.push(d, dx, dz, 0.05);
+      this.stats.workerBumps = (this.stats.workerBumps || 0) + 1;
+      if (!w._bumpSay || this.time - w._bumpSay > 3) { w._bumpSay = this.time; w.say('あっ、ぶつかった！', 'warn'); }
+    }
+  }
+  /** 歩道橋の上なら、その高さ（橋の中央が一番高いアーチ） */
+  bridgeHeight(x, z) {
+    for (const p of this.placed) {
+      if (p.type !== 'footbridge') continue;
+      const ab = p.b.clone().sub(p.a), len = ab.length(); ab.divideScalar(len);
+      const rx = x - p.a.x, rz = z - p.a.z;
+      const along = rx * ab.x + rz * ab.z, side = Math.abs(-rx * ab.z + rz * ab.x);
+      if (along < 0 || along > len || side > 0.8) continue;
+      return Math.sin((along / len) * Math.PI) * p.height;
+    }
+    return 0;
+  }
+  /** 置いた物が家具・壁にめり込んでいたら、近くの空いている所へずらす */
+  settleOut(pos, r) {
+    const st = this.stage;
+    const ok = (x, z) => st.inBounds(x, z, r) && !st.blocked(x, z, r * 0.8, false, true);
+    if (ok(pos.x, pos.z)) return;
+    for (let rad = 0.5; rad < 12; rad += 0.5) for (let a = 0; a < 16; a++) {
+      const x = pos.x + Math.cos((a / 16) * Math.PI * 2) * rad, z = pos.z + Math.sin((a / 16) * Math.PI * 2) * rad;
+      if (ok(x, z)) { pos.x = x; pos.z = z; return; }
+    }
+  }
+  /** 資材箱：家具・壁と重ならない位置に置き、当たり判定（静的な箱）を合わせる */
+  settleCrate() {
+    this.settleOut(this.crate.pos, 1.4);
+    this.crate.pos.y = this.stage.heightAt(this.crate.pos.x, this.crate.pos.z);
+    this.crate.syncCollider && this.crate.syncCollider(true);
   }
   addWorkerGrab(w) {
     if (!this.grabbables) return;
@@ -186,7 +246,7 @@ export class Game {
     if (!this.grabbables) return;
     const names = { barricade: 'バリケード', bell: '特殊ベル', sensor: '接近センサー' };
     p.grabEntry = this.grabbables.add(carryEntry(this, { name: names[p.type] || p.type, kind: 'piece', obj: p.mesh, radius: p.type === 'barricade' ? 2.2 : 0.8, height: 1.2, canGrab: () => this.mode === 'build',
-      getPos: () => p.mesh.position.clone(), setPos: (v) => p.mesh.position.copy(v), onDrop: (pos) => { p.x = pos.x; p.z = pos.z; this.refreshCourse(); } }));
+      getPos: () => p.mesh.position.clone(), setPos: (v) => p.mesh.position.copy(v), onDrop: (pos) => { p.x = pos.x; p.z = pos.z; this.refreshCourse(); this.navDirty = true; } }));
   }
   addPiggyGrab() {
     const pg = this.piggy;
@@ -196,6 +256,7 @@ export class Game {
   /** 小物・資材箱・製造機の位置と、資材箱の中身を保存 */
   serializeGrab() {
     return {
+      layout: MAP_LAYOUT,
       props: (this.propEntries || []).map((e) => e.serialize()),
       crate: { n: this.crate.count, x: +this.crate.pos.x.toFixed(2), z: +this.crate.pos.z.toFixed(2), pinned: !!this.crate.pinned },
       factory: [+this.factory.group.position.x.toFixed(2), +this.factory.group.position.z.toFixed(2)],
@@ -204,9 +265,11 @@ export class Game {
   applyGrabSave(d) {
     const moved = d.grab;
     if (!moved) return;
-    (moved.props || []).forEach((v, i) => { const e = this.propEntries[i]; if (!e || !v) return; const o = e.getPos(); if (Math.abs(o.x - v[0]) > 0.05 || Math.abs(o.z - v[1]) > 0.05 || Math.abs((e.obj.rotation.y || 0) - (v[2] || 0)) > 0.01) e.restore(v); });
-    if (moved.crate) { this.crate.count = moved.crate.n; if (moved.crate.pinned) { this.crate.pos.set(moved.crate.x, 0, moved.crate.z); this.crate.pinned = true; } }
-    if (moved.factory) this.factory.group.position.set(moved.factory[0], 0, moved.factory[1]);
+    // Ver.0.5：部屋を広げた（家具の位置が変わった）ので、古い配置で保存された小物の位置は使わない。部屋の外の位置も使わない
+    const props = moved.layout === MAP_LAYOUT ? moved.props || [] : [];
+    props.forEach((v, i) => { const e = this.propEntries[i]; if (!e || !v || !this.stage.inBounds(v[0], v[1], 0.5)) return; const o = e.getPos(); if (Math.abs(o.x - v[0]) > 0.05 || Math.abs(o.z - v[1]) > 0.05 || Math.abs((e.obj.rotation.y || 0) - (v[2] || 0)) > 0.01) e.restore(v); });
+    if (moved.crate) { this.crate.count = moved.crate.n; if (moved.crate.pinned && this.stage.inBounds(moved.crate.x, moved.crate.z, 1)) { this.crate.pos.set(moved.crate.x, 0, moved.crate.z); this.crate.pinned = true; this.settleCrate(); } }
+    if (moved.factory && moved.layout === MAP_LAYOUT && this.stage.inBounds(moved.factory[0], moved.factory[1], 2)) { this.factory.group.position.set(moved.factory[0], 0, moved.factory[1]); this.settleOut(this.factory.group.position, 2.6); }
   }
 
   // ================= 小さな脅威と防衛チュートリアル =================
@@ -263,6 +326,7 @@ export class Game {
     if (this.shelf) this.shelf.dispose();
     for (const th of this.threats || []) th.dispose();
     this.threats = [];
+    if (this.darts) this.darts.clear();
     this.workers.clear();
     this.dominoes.clear();
     this.scene.remove(this.dominoes.mesh);
@@ -289,6 +353,8 @@ export class Game {
   // ================= パーツ → 3Dの現場 =================
   level(id) { return this.progress.lv(id); }
   evolved(id) { return !!this.progress.evolutions[id]; }
+  /** 自動設置機が動くステージか（Ver.0.5：ステージ1・2では休止。セーブのレベルは残す） */
+  machineActive() { return PARTS.machine.stages.includes(this.stageId); }
   odMult() { return 1; }
   workMult(role) {
     let m = 1 + 0.2 * this.level('boots');
@@ -347,11 +413,19 @@ export class Game {
 
   /** ガチャで選んだパーツを反映し、現場に登場したもの（人・設備）を記録する */
   onGachaPick(p) {
+    const wasFirst = !this.progress.firstGachaDone;
     const before = new Set(this.workers.list);
     const res = this.progress.take(p);
     if (p.id === 'rewind') this.rewinds += 2;
     this.syncPartsToWorld(true);
+    this.navDirty = true;
     this.lastSpawned = this.workers.list.filter((w) => !before.has(w));
+    if (p.id === 'soldier' && this.level('soldier') === 1) this.setHint('💂 おもちゃの兵隊：つかんで置いた所が持ち場。敵（ロボット・ネズミ）が来る所の近くに置こう', 14);
+    if (p.id === 'barricade' && this.stageId === 1 && this.level('barricade') === 1) this.setHint('🚧 バリケード：「配置」から置ける。暴走ミニカーの矢印の先に置くと跳ね返す', 14);
+    // 最初のガチャで回収担当：そのまま倒れたドミノを拾いに行く様子をカメラで追う
+    this.firstPickWorker = wasFirst && p.id === 'collector' ? this.lastSpawned[0] || null : null;
+    // 獲得した直後に「効いている様子」を見せる：カメラで追いかける相手と、ひと言
+    this.showcase = this.makeShowcase(p);
     const id = p.evo || p.id;
     const firstOf = (role) => { const w = this.workers.list.find((x) => x.role === role); return w ? w.pos.clone() : null; };
     const T = {
@@ -366,6 +440,58 @@ export class Game {
     return res;
   }
 
+  get defenseStyle() { return DEFENSE.style; }
+  /** ガチャ直後の見せ場：新しい人は本人、道具は使う人、設備は設備そのものをカメラで追う */
+  makeShowcase(p) {
+    const id = p.evo || p.id;
+    const SAYS = {
+      builder: '設計図どおりに並べます！', carrier: '倉庫から最前線へ運びます！', collector: '倒れたドミノ、拾ってきます！', restorer: 'マジックハンドで復旧！',
+      stopperCrew: 'ストッパーを差し込みます！', guard: '警備につきます！', soldier: '持ち場へ！ 敵はスポンジ弾で追い払います',
+    };
+    const newW = (this.lastSpawned || [])[0];
+    if (newW && newW.grabEntry) return { entry: newW.grabEntry, text: SAYS[newW.role] || 'がんばります！', obj: newW.root };
+    const byRole = (...roles) => { for (const r of roles) { const w = this.workers.list.find((x) => x.role === r); if (w && w.grabEntry) return w; } return null; };
+    const TOOL = {
+      boots: [['builder', 'carrier', 'collector'], '赤いブーツで足が速くなった！'],
+      basket: [['carrier', 'builder', 'collector'], '背中のかごで一度にたくさん運べる！'],
+      level: [['builder'], '水平器を当てて、まっすぐ置くよ（うっかり倒し減）'],
+      massBuild: [['builder'], '金ヘルメットの大量建設隊！ 2個ずつ並べる'],
+      autoSafety: [['stopperCrew', 'soldier'], 'アンテナで連動！ 危ない所を先回りで隔離'],
+    };
+    if (TOOL[id]) { const w = byRole(...TOOL[id][0]); if (w) return { entry: w.grabEntry, text: TOOL[id][1], obj: w.root }; }
+    if (id === 'factory' && this.factoryEntry) return { entry: this.factoryEntry, text: '🏭 工場が動き出した！ 歯車が回ってベルトから箱へ', obj: this.factory.group };
+    if (id === 'train' && this.trainEntry) return { entry: this.trainEntry, text: '🚂 列車が倉庫と最前線を往復！', obj: this.train.mesh };
+    return null;
+  }
+  /** 兵隊の持ち場（コースのまわりに分散） */
+  soldierPost(i) {
+    const posts = this.def.soldierPosts || this.def.guardPosts;
+    const [x, z] = posts[i % posts.length];
+    return new THREE.Vector3(x + (i >= posts.length ? 1.5 : 0), 0, z);
+  }
+  /** 兵隊が相手にする敵：攻撃中で、持ち場か本人の近く（見張り範囲）にいるもの */
+  soldierTarget(w) {
+    let best = null, bd = Infinity;
+    const R1 = 16, R2 = 13;
+    for (const th of this.threats || []) {
+      if (!th.attacking || !th.repel || th instanceof RunawayCar || th.held) continue;
+      const dh = Math.hypot(th.pos.x - w.home.x, th.pos.z - w.home.z), dw = Math.hypot(th.pos.x - w.pos.x, th.pos.z - w.pos.z);
+      if (dh > R1 && dw > R2) continue;
+      if (dw < bd) { bd = dw; best = th; }
+    }
+    return best;
+  }
+  /** 復旧係の待機場所：近く（30以内）に、まだ起こされていない倒れたドミノがあればその位置 */
+  pendingAccidentNear(pos) {
+    if (this.mode !== 'build') return null;
+    let best = null, bd = 30 * 30;
+    for (const d of this.dominoes.list) {
+      if (!d.slot || d.removed || d.held || !d.toppled) continue;
+      const t = d.body.translation(); const dd = (t.x - pos.x) ** 2 + (t.z - pos.z) ** 2;
+      if (dd < bd) { bd = dd; best = t; }
+    }
+    return best ? new THREE.Vector3(best.x, 0, best.z) : null;
+  }
   guardPost(i) {
     const posts = this.def.guardPosts;
     const [x, z] = posts[i % posts.length];
@@ -380,7 +506,7 @@ export class Game {
     for (const sl of this.course.allSlots) sl.special = null;
     const main = this.course.segments[0];
     if (main) {
-      for (const cp of this.checkpoints || []) if (main.slots[cp.slotIndex]) main.slots[cp.slotIndex].kind = 'wide';
+      // Ver.0.5：中間ゴールのマスも通常のドミノ（幅広ドミノは廃止）
       for (const sp of this.specials || []) { const sl = main.slots[sp.at]; if (sl && !sp.consumed && sl.kind === 'normal') sl.special = sp; }
     }
     // ベルの取り付け先
@@ -640,6 +766,7 @@ export class Game {
       if (!d.toppled && this.dominoes.isStandingAt(d, d.slot)) continue;
       if (duringRun && (d.slot.order < minOrder || this.run.toppled.has(d))) continue;
       if (!this.isStill(d)) continue; // 倒れている最中は待つ（寄りかかって止まったものは対象）
+      if (d.restandFailAt && this.time - d.restandFailAt < 4) continue; // さっき起こせなかったもの（同じ所で足踏みしない）
       const t = d.body.translation();
       const dist2s = (t.x - d.slot.x) ** 2 + (t.z - d.slot.z) ** 2;
       if (dist2s > CFG.restandDistance ** 2) continue;
@@ -666,11 +793,19 @@ export class Game {
     return best;
   }
   restand(d) {
-    if (d.removed || !d.slot) return;
-    if (this.mode === 'run' && this.run && (this.run.frontOrder + 6 > d.slot.order)) return;
+    if (d.removed || !d.slot) return null;
+    if (this.mode === 'run' && this.run && (this.run.frontOrder + 6 > d.slot.order)) return null;
     const slot = d.slot;
     // マスの上に別のドミノが寝ていたら、重ねて立て直さない
-    if (this.slotBlocker(slot, d)) return null;
+    const b = this.slotBlocker(slot, d);
+    if (b) {
+      // 2枚がお互いのマスの上に寝ている（どちらも起こせない）：もう1枚を拾い上げてから起こす。拾った分は在庫へ、マスは空きになる
+      if (b.slot && b.slot !== slot && !b.held && !b.removed && this.slotBlocker(b.slot, b) === d) {
+        const bs = b.slot; this.dominoes.remove(b); if (bs.domino === b) bs.domino = null; this.stock++; this.unbuiltDirty = true;
+        this.stats.untangled = (this.stats.untangled || 0) + 1;
+        if (this.slotBlocker(slot, d)) { d.restandFailAt = this.time; return null; }
+      } else { d.restandFailAt = this.time; return null; }
+    }
     const kind = slot.kind === 'wide' ? 'wide' : slot.special ? slot.special.type : 'normal';
     const color = d.color;
     this.dominoes.remove(d);
@@ -837,6 +972,13 @@ export class Game {
   }
 
   // ---------- 置くタイプの設備 ----------
+  /** ドミノ製造機（本体・ベルト・ドミノ箱）の場所。人や列車は通り抜けない */
+  factoryBlocks(x, z, m) {
+    const f = this.factory;
+    if (!f || !this.progress || this.level('factory') <= 0 || f.carried) return false;
+    const p = f.group.position;
+    return Math.abs(x - (p.x + 2.45)) < 4.95 + m && Math.abs(z - p.z) < 2.1 + m;
+  }
   pieceBlocks(x, z, m, forRoomba) {
     const inRect = (o, mm) => {
       const c = Math.cos(-o.yaw), s = Math.sin(-o.yaw), dx = x - o.x, dz = z - o.z;
@@ -868,6 +1010,15 @@ export class Game {
       }
       return { ok: true };
     }
+    if (type === 'footbridge') {
+      const ax = Math.cos(yaw), az = -Math.sin(yaw);
+      for (const e of [-1, 1]) {
+        const ex = x + ax * e * (FOOTBRIDGE_L / 2 - 0.6), ez = z + az * e * (FOOTBRIDGE_L / 2 - 0.6);
+        if (!st.inBounds(ex, ez, 0.8) || st.blocked(ex, ez, 0.6)) return { ok: false, why: '階段の所に家具があります' };
+        if (this.nearestSlot(ex, ez, 1.0)) return { ok: false, why: '階段がドミノの列にかかっています（列をまたぐ向きに）' };
+      }
+      return { ok: true };
+    }
     if (!st.inBounds(x, z, 1) || st.blocked(x, z, type === 'barricade' ? 0.3 : 0.6)) return { ok: false, why: '置けない場所です' };
     if (type === 'barricade') for (let t = -2.4; t <= 2.4; t += 0.6) { const px = x + Math.cos(yaw) * t, pz = z - Math.sin(yaw) * t; if (this.nearestSlot(px, pz, 0.6)) return { ok: false, why: 'コースと重なっています' }; }
     if (type === 'bell' && !this.nearestSlot(x, z, 2.5)) return { ok: false, why: 'コースのすぐ横に置いてください' };
@@ -885,18 +1036,25 @@ export class Game {
       if (!quiet) this.audio.buy();
       return p;
     }
-    const mesh = type === 'barricade' ? barricadeMesh() : type === 'sensor' ? sensorMesh() : bellPieceMesh();
+    const mesh = type === 'barricade' ? barricadeMesh() : type === 'sensor' ? sensorMesh() : type === 'footbridge' ? footbridgeMesh(FOOTBRIDGE_L, FOOTBRIDGE_H) : bellPieceMesh();
     mesh.position.set(x, this.stage.heightAt(x, z), z); mesh.rotation.y = yaw;
     this.scene.add(mesh);
     const p = { type, x, z, yaw, mesh, slot: null };
+    if (type === 'footbridge') {
+      const ax = Math.cos(yaw), az = -Math.sin(yaw);
+      p.a = new THREE.Vector3(x - ax * FOOTBRIDGE_L / 2, 0, z - az * FOOTBRIDGE_L / 2); p.b = new THREE.Vector3(x + ax * FOOTBRIDGE_L / 2, 0, z + az * FOOTBRIDGE_L / 2); p.height = FOOTBRIDGE_H;
+      if (this.nav) this.nav.addBridge(p.a, p.b);
+      this.stats.footbridges = (this.stats.footbridges || 0) + 1;
+    }
     this.placed.push(p);
     this.addPieceGrab(p);
+    this.navDirty = true;
     this.refreshCourse();
     if (!quiet) this.audio.buy();
     return p;
   }
   removePieceAt(x, z) {
-    for (const p of this.placed) if ((p.x - x) ** 2 + (p.z - z) ** 2 < 2.5 * 2.5) { this.scene.remove(p.mesh); this.placed.splice(this.placed.indexOf(p), 1); if (p.grabEntry) this.grabbables.remove(p.grabEntry); this.refreshCourse(); return true; }
+    for (const p of this.placed) if ((p.x - x) ** 2 + (p.z - z) ** 2 < 2.5 * 2.5) { this.scene.remove(p.mesh); this.placed.splice(this.placed.indexOf(p), 1); if (p.grabEntry) this.grabbables.remove(p.grabEntry); this.refreshCourse(); this.navDirty = true; return true; }
     for (const p of this.pieces) {
       const f = p.footprint; const c = Math.cos(-f.yaw), s = Math.sin(-f.yaw), dx = x - f.x, dz = z - f.z;
       if (Math.abs(dx * c + dz * s) < f.hw + 1 && Math.abs(-dx * s + dz * c) < f.hd + 1) {
@@ -984,6 +1142,7 @@ export class Game {
       const f = this.run.frontPos;
       if ((pos.x - f.x) ** 2 + (pos.z - f.z) ** 2 < 1.6 * 1.6) return { pos: f, label: '！' };
     }
+    for (const th of this.threats || []) if (th instanceof RunawayCar && th.state === 'drive' && (pos.x - th.pos.x) ** 2 + (pos.z - th.pos.z) ** 2 < 9) return { pos: th.pos, label: 'わっ、車だ！' };
     const r = this.roomba;
     if (r && r.state !== 'dock') {
       const rad = this.alarm ? 11 : 5;
@@ -1142,7 +1301,53 @@ export class Game {
       if ((t.x - r.pos.x) ** 2 + (t.z - r.pos.z) ** 2 < (r.r + 1.6) ** 2) { d.byRoomba = true; this.stats.roombaKnocks++; }
     }
     if (this.mode === 'run' || this.mode === 'test') this.runTopple(d);
-    else if (d.slot) { d.accident = true; this.onAccidentTopple(d); }
+    else if (d.slot) { d.accident = true; this.onAccidentTopple(d); this.countAccident(d); }
+  }
+
+  /** 建設中の事故：倒れた枚数を数え、連鎖が止まってから観客の反応（倒れている最中はドミノの音を優先） */
+  countAccident(d) {
+    const ep = (this.accEp ||= { n: 0, last: 0, x: 0, z: 0 });
+    if (!ep.n) { const t = d.body.translation(); ep.x = t.x; ep.z = t.z; }
+    ep.n++; ep.last = this.time;
+  }
+  updateAccidentReaction() {
+    const ep = this.accEp;
+    if (!ep || !ep.n || this.time - ep.last < 1.3) return;
+    const n = ep.n; ep.n = 0;
+    if (this.mode !== 'build' || n < 3 || this.time - (this._crowdT || -99) < 8) return;
+    this._crowdT = this.time;
+    this.audio.crowdAww(n);
+    this.stats.accidentReactions = (this.stats.accidentReactions || 0) + 1;
+    this.fx.floatAt(tmp.set(ep.x, 2.4, ep.z), n >= 40 ? '😱 ブー！ 大事故…' : 'おぉ〜……あぁ〜……', 'warn', 1.8);
+    this.emit('accident', n);
+  }
+
+  // ================= 序盤のやり直し =================
+  /** 最初のガチャを選ぶまでの間で、倒れた・散らばったドミノがあるとき */
+  canEarlyRestart() {
+    if (this.progress.firstGachaDone || this.mode !== 'build' || this.run) return false;
+    for (const d of this.dominoes.list) if (!d.held && (d.toppled || !d.slot || !this.dominoes.isStandingAt(d, d.slot))) return true;
+    return false;
+  }
+  /**
+   * 「↺ 最初から並べ直す」：置いたドミノを全部資材箱に戻す（セーブ・記録・設定はそのまま）
+   * 枚数は増減しない：ワールドのドミノ＋人が持っている分を、すべて資材箱へ
+   */
+  earlyRestart() {
+    if (this.progress.firstGachaDone || this.mode !== 'build') return 0;
+    if (this.hand) this.hand.cancel();
+    let n = 0;
+    for (const d of [...this.dominoes.list]) { if (d.slot && d.slot.domino === d) d.slot.domino = null; this.dominoes.remove(d); n++; }
+    for (const w of this.workers.list) { n += w.load; w.load = 0; w.releaseJob(); }
+    for (const s of this.course.allSlots) s.claim = 0;
+    this.crate.count += n;
+    this.unbuiltDirty = true;
+    for (const cp of this.checkpoints) cp.reset();
+    this.stats.earlyRestarts = (this.stats.earlyRestarts || 0) + 1;
+    this.audio.rewind();
+    this.fx.floatAt(this.crate.pos.clone().setY(2.4), `↺ ${n}枚を資材箱に戻しました`, 'coin', 2);
+    this.emit('earlyRestart', n);
+    return n;
   }
 
   // ================= 本番の連鎖 =================
@@ -1539,20 +1744,16 @@ export class Game {
     for (const p of this.pieces) p.update(dt);
     for (const cp of this.checkpoints) {
       cp.update(dt);
-      if (this.mode === 'build' && cp.paddle.angle() > 0.4) {
-        cp.idleDown = (cp.idleDown || 0) + dt;
-        if (cp.idleDown > 3) {
-          const pb = cp.paddle.base.translation();
-          // 板の上・まわりに倒れたドミノ（または手で置いたもの）が残っている間は起こさない。正しく立っているドミノは邪魔にならない
-          const busy = [...this.dominoes.list].some((d) => { if (d.held || (d.slot && this.dominoes.isStandingAt(d, d.slot))) return false; const t = d.body.translation(); return (t.x - pb.x) ** 2 + (t.z - pb.z) ** 2 < 1.2 * 1.2 && t.y < 1.4; });
-          if (!busy) { cp.reset(); cp.idleDown = 0; }
-        }
-      } else cp.idleDown = 0;
+      // 建設中：レバーは中間ゴールのドミノが立て直されると自然に戻る。倒れた回の作動状態だけ解除する
+      if (this.mode === 'build' && cp.fired && cp.slot.domino && this.dominoes.isStandingAt(cp.slot.domino, cp.slot)) cp.reset();
     }
     for (const s of this.stoppers) s.update(dt);
     if (this.roomba) this.roomba.update(dt, this);
     for (const th of this.threats || []) th.update(dt);
+    if (this.darts) this.darts.update(dt);
     this.updateTutorial();
+    this.updateAccidentReaction();
+    if (this.nav) { if (this.navDirty) { this.navDirty = false; this.nav.buildStatic(); for (const p of this.placed) if (p.type === 'footbridge') this.nav.addBridge(p.a, p.b); } this.nav.refresh(this.time); }
     this.updateThrows(dt);
     this.updateAlarm(dt);
     this.workers.update(dt);
@@ -1614,7 +1815,7 @@ export class Game {
   totalDominoes() {
     let inCourse = 0;
     for (const d of this.dominoes.list) inCourse++;
-    return this.stock + this.crate.count + this.machine.hopper + this.workers.inHands() + inCourse + (this.roomba ? this.roomba.bin : 0) + this.train.load;
+    return this.stock + this.crate.count + this.machine.hopper + this.workers.inHands() + inCourse + (this.roomba ? this.roomba.bin : 0) + this.train.load + (this.factory ? this.factory.box : 0);
   }
 
   // ================= セーブ =================
@@ -1643,7 +1844,7 @@ export class Game {
       gachaUsed: this.gachaMachine.used,
       finalChest: this.finalChest.opened,
       // 在庫（資材箱の中身は grab.crate に別に保存。二重計上しない）
-      stock: this.stock + this.machine.hopper + this.workers.inHands() + this.train.load + (this.roomba ? this.roomba.bin : 0),
+      stock: this.stock + this.machine.hopper + this.workers.inHands() + this.train.load + (this.roomba ? this.roomba.bin : 0) + (this.factory ? this.factory.box : 0),
       grab: this.serializeGrab(),
       pieceSeq: this.pieceSeq || 0,
     };

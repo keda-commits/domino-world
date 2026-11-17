@@ -33,7 +33,8 @@ export const PARTS = {
     desc: (lv) => `全員の移動・作業速度 +20%（いま ×${(1 + 0.2 * lv).toFixed(1)}）。赤いブーツを履く`,
   },
   machine: {
-    name: 'ドミノ自動設置機', icon: '🚜', category: 'build', rarity: 'epic', max: 4, stages: [1, 2], minLevel: 4,
+    // Ver.0.5：ステージ1・2では出現・稼働しない（並べるのは人の仕事）。将来のエンドレスモード用にコードとセーブのレベルは残す
+    name: 'ドミノ自動設置機', icon: '🚜', category: 'build', rarity: 'epic', max: 4, stages: [], minLevel: 4,
     desc: (lv) => lv === 0 ? 'おもちゃのブルドーザーが計画コースを走りながら毎秒2.5個を設置' : `設置速度 毎秒${(2.5 + 1.5 * lv).toFixed(1)}個へ`,
   },
   level: {
@@ -63,7 +64,17 @@ export const PARTS = {
     desc: (lv) => `おもちゃの列車が倉庫と最前線を往復し一度に${20 * (lv + 1)}個を運ぶ`,
   },
 
+  footbridge: {
+    name: '歩道橋', icon: '🪜', category: 'logistics', rarity: 'rare', max: 4, stages: [1, 2], minLevel: 3,
+    desc: (lv) => `人がドミノの列を上から越える橋（${lv}→${lv + 1}本）。「配置」で列をまたぐように置くと、遠回りが減って事故も減る`,
+  },
+
   // ---------- 防衛（ストッパーズ） ----------
+  soldier: {
+    // Ver.0.5：防衛の作り直し。2案（射撃型／押し返し型）を試作し、DEFENSE.style で切り替え（採用は射撃型）
+    name: 'おもちゃの兵隊', icon: '💂', category: 'defense', rarity: 'rare', max: 5, stages: [1, 2], minLevel: 4,
+    desc: (lv) => `持ち場の近くに来た敵をスポンジ弾で撃退する兵隊（${lv}→${lv + 1}人）。ネズミは1発、ロボットは3発で逃げ帰る。速すぎる暴走ミニカーには効かない。つかんで置いた所が持ち場`,
+  },
   stopperCrew: {
     name: 'ストッパー設置係', icon: '🦺', category: 'defense', rarity: 'rare', max: 4, stages: [1, 2], minLevel: 3,
     desc: (lv) => `青ヘルメット隊員が${Math.max(14, 34 - 6 * lv)}個ごとに安全ストッパーを設置（本番開始で自動解除）`,
@@ -81,11 +92,12 @@ export const PARTS = {
     desc: (lv) => `警報で出動し、ルンバの進路に臨時バリケードを置く隊員（${lv}→${lv + 1}人）`,
   },
   barricade: {
-    name: 'バリケード', icon: '🚧', category: 'defense', rarity: 'common', max: 5, stages: [2],
-    desc: (lv) => `ルンバが避けて方向転換する柵を3つ追加（いま ${3 * lv}個）`,
+    name: 'バリケード', icon: '🚧', category: 'defense', rarity: 'common', max: 5, stages: [1, 2], minLevel: 5,
+    desc: (lv) => `柵を3つ追加（いま ${3 * lv}個）。暴走ミニカーを跳ね返し、ルンバは方向転換する。「配置」で置く`,
   },
   sensor: {
-    name: '接近センサー', icon: '📡', category: 'defense', rarity: 'common', max: 4, stages: [2],
+    // Ver.0.5：おもちゃの兵隊（見張り＋撃退）に統合。新しくは出ない（置いてある分はそのまま動く）
+    name: '接近センサー', icon: '📡', category: 'defense', rarity: 'common', max: 4, stages: [],
     desc: (lv) => `置いた場所の半径7にルンバが来ると警報（いま ${2 * lv}本→${2 * lv + 2}本）`,
   },
   gate: {
@@ -122,15 +134,22 @@ export const PARTS = {
   },
   clover: {
     name: '四つ葉の加護', icon: '🍀', category: 'special', rarity: 'rare', max: 3, stages: [1, 2], minLevel: 3,
-    desc: (lv) => `ガチャの選択肢が4つになる確率 ${25 * (lv + 1)}%`,
+    // Ver.0.5：ガチャは基本2択（10%で3択）。四つ葉は「3択になる確率」を上げる（最大3択）
+    desc: (lv) => `ガチャが3択になる確率 ${10 + 15 * lv}% → ${10 + 15 * (lv + 1)}%`,
   },
   piggy: {
     name: '欲張り貯金箱', icon: '🐷', category: 'special', rarity: 'epic', max: 1, stages: [1, 2], minLevel: 5,
     desc: () => '連鎖が長いほど貯金（追加経験値）が増える。ゴール到達で全額、失敗すると半分を失う',
   },
   rewind: {
-    name: 'ぜんまい巻き戻し', icon: '⏪', category: 'special', rarity: 'common', max: 99, stages: [1, 2], minLevel: 3, consumable: true,
+    // Ver.0.5 で廃止（通常ステージには出ない。将来用に定義だけ残す）
+    name: 'ぜんまい巻き戻し', icon: '⏪', category: 'special', rarity: 'common', max: 99, stages: [], minLevel: 3, consumable: true,
     desc: () => '消費アイテム×2。連鎖失敗後、コースとギミックを倒す前の状態に一瞬で戻す',
+  },
+  xpPack: {
+    // 抽選候補が足りないときの代わりの報酬（何度でも出る）
+    name: '経験値パック', icon: '⭐', category: 'special', rarity: 'common', max: 9999, stages: [], consumable: true,
+    desc: () => '経験値 +30（次のガチャが近づく）',
   },
 };
 
@@ -141,12 +160,12 @@ export const EVOLUTIONS = {
     desc: '建設担当が金ヘルメットの大量建設隊に。2倍の資材を背負い、1回で2個ずつ並べる',
   },
   fastLine: {
-    name: '高速建設ライン', icon: '🛤', requires: { machine: 1, train: 1 },
+    name: '高速建設ライン', icon: '🛤', requires: { machine: 1, train: 1 }, stages: [], // Ver.0.5：ステージ1・2では出ない（自動設置機とともに休止）
     desc: '列車が自動設置機に直結。設置機の速度 ×2、補給待ちがほぼ無くなる',
   },
   autoSafety: {
-    name: '自動事故防止チーム', icon: '🚨', requires: { stopperCrew: 1, sensor: 1 },
-    desc: 'センサーとストッパー隊が連動。ルンバ接近・うっかり連鎖を検知すると自動で緊急ストッパーを差し込み、隊員の移動 ×1.6',
+    name: '自動事故防止チーム', icon: '🚨', requires: { stopperCrew: 1, soldier: 1 },
+    desc: '兵隊の見張りとストッパー隊が連動。ルンバ接近・うっかり連鎖を検知すると自動で緊急ストッパーを差し込み、隊員の移動 ×1.6',
   },
   stopperHQ: {
     name: 'ストッパーズ本部', icon: '🏢', requires: { stopperCrew: 2, watchtower: 1, gate: 1 },
@@ -155,15 +174,20 @@ export const EVOLUTIONS = {
 };
 
 export const GACHA = {
-  choices: 3,
+  choices: 2, // 基本2択
+  threeChance: 0.1, // 10% で3択
   // 序盤の保証：建設・回収の最低限の能力をガチャ運に依存させない
   guarantees: [
     { level: 2, id: 'builder', when: (p) => (p.builder || 0) === 0 },
     { level: 3, id: 'collector', when: (p) => (p.collector || 0) === 0 },
     { level: 5, id: 'builder', when: (p) => (p.builder || 0) < 2 },
-    { level: 6, id: 'stopperCrew', when: (p) => (p.stopperCrew || 0) === 0 },
+    { level: 6, id: 'soldier', when: (p) => (p.soldier || 0) === 0 }, // ロボット（Lv5〜）への対策
+    { level: 7, id: 'stopperCrew', when: (p) => (p.stopperCrew || 0) === 0 },
+    { level: 8, id: 'barricade', when: (p) => (p.barricade || 0) === 0 }, // 暴走ミニカー（Lv7〜）への対策
   ],
   stage2DefenseBias: 1.8, // ステージ2での防衛パーツの重み倍率
+  stage1DefenseBias: 1.7, // ステージ1：レベル5（敵が増え始める）からの防衛パーツの重み倍率
+  stage1DefenseFrom: 5,
   repeatPenalty: 0.6, // 前回出たパーツの重み
 };
 
@@ -175,3 +199,6 @@ export const XP = {
   forRun: (n) => n,
   recordBonusPerDomino: 0.5,
 };
+
+// Ver.0.5 防衛方式（試作2案）。'shoot'：スポンジ弾で撃退（採用） / 'push'：走って行って盾で押し返す
+export const DEFENSE = { style: 'shoot' };

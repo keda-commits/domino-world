@@ -108,18 +108,31 @@ export class Mouse {
         break;
       }
       case 'return':
-        if (this.moveTo(this.den, dt, 6.5)) { this.state = 'den'; this.group.visible = false; this.body.setNextKinematicTranslation({ x: this.den.x, y: -5, z: this.den.z }); const [a, b] = this.def.interval || [55, 85]; this.timer = a + Math.random() * (b - a); this.trips++; }
+        if (this.scared > 0) { this.scared -= dt; this.group.position.y = Math.abs(Math.sin(this.scared * 25)) * 0.35; }
+        if (this.moveTo(this.den, dt, this.scared > 0 ? 8 : 6.5)) { this.state = 'den'; this.group.visible = false; this.body.setNextKinematicTranslation({ x: this.den.x, y: -5, z: this.den.z }); const [a, b] = this.def.interval || [55, 85]; this.timer = a + Math.random() * (b - a); this.trips++; }
         break;
     }
   }
   startReturn() { this.state = 'return'; this.target = null; }
+  get attacking() { return this.state === 'warn' || this.state === 'go'; }
+  /** 防衛に当たった：スポンジ弾1発・押し返し1回で、びっくりして巣へ逃げ帰る（動きが実際に変わる） */
+  repel(from, kind) {
+    if (!this.attacking) return false;
+    const g = this.game;
+    this.startReturn();
+    this.scared = 1.2; // 少しの間、跳ねながら逃げる
+    g.stats.mouseRepelled = (g.stats.mouseRepelled || 0) + 1;
+    g.fx.floatAt(this.pos.clone().setY(1.4), kind === 'dart' ? 'チュ〜ッ！（命中・退散）' : 'チュ〜ッ！（押し返された）', 'coin', 1.2);
+    g.audio.squeak && g.audio.squeak(2.4);
+    return true;
+  }
   moveTo(p, dt, speed) {
     const dx = p.x - this.pos.x, dz = p.z - this.pos.z, d = Math.hypot(dx, dz);
     if (d < 0.15) return true;
     const st = Math.min(d, speed * dt);
     this.pos.x += (dx / d) * st; this.pos.z += (dz / d) * st;
     this.group.rotation.y = Math.atan2(dx, dz);
-    this.group.position.y = Math.abs(Math.sin(performance.now() * 0.03)) * 0.05;
+    if (!(this.scared > 0)) this.group.position.y = Math.abs(Math.sin(performance.now() * 0.03)) * 0.05;
     this.body.setNextKinematicTranslation({ x: this.pos.x, y: 0.32, z: this.pos.z });
     return false;
   }

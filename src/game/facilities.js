@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { CFG } from '../config.js';
 import { MAT, rbox, shadow, toyBox } from '../world/props.js';
 import { trainMesh } from '../world/devices.js';
+import { PathFollower } from './nav.js';
+import { R } from '../core/physics.js';
 
 const miniGeo = new THREE.BoxGeometry(CFG.dominoW * 0.7, CFG.dominoH * 0.7, CFG.dominoT * 0.9);
 const miniMats = ['#ff3b3b', '#ffd21f', '#1fa8ff', '#3ccf5a', '#ff8a1f', '#6b5cff', '#ff5cb0'].map((c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.35 }));
@@ -46,29 +48,56 @@ export class Crate {
     this.pos = this.group.position;
     this.count = 0;
     this.cap = 60;
+    // 資材箱の当たり判定（ドミノや小物がぶつかる。動かすと一緒に動く）
+    this.body = game.physics.world.createRigidBody(R.RigidBodyDesc.kinematicPositionBased().setTranslation(0, -5, 0));
+    game.physics.world.createCollider(R.ColliderDesc.cuboid(1.2, 0.38, 0.9).setTranslation(0, 0.38, 0).setFriction(0.6), this.body);
     this._v = new THREE.Vector3();
     this.moving = false;
   }
   spot(id, out) { const a = (id * 2.399) % (Math.PI * 2); return out.set(this.pos.x + Math.cos(a) * 1.6, 0, this.pos.z + Math.sin(a) * 1.4); }
   take(n) { const t = Math.min(n, this.count); this.count -= t; return t; }
+  /**
+   * 当たり判定：止まって置かれている間だけ有効。動いている（自動移動・運ばれている）間は床の下へ退避し、
+   * 置かれた瞬間に「瞬間移動」で合わせる（速度を持って掃くとドミノをはね飛ばすため）
+   */
+  syncCollider(force = false) {
+    const active = !this.moving && !this.carried;
+    if (active && (force || !this.colliderOn)) {
+      this.body.setTranslation({ x: this.pos.x, y: this.pos.y, z: this.pos.z }, true);
+      this.body.setRotation(this.game.physics.quatYaw(this.group.rotation.y), true);
+    } else if (!active && this.colliderOn) this.body.setTranslation({ x: this.pos.x, y: -5, z: this.pos.z }, true);
+    this.colliderOn = active;
+  }
+  /** 自動移動の行き先：建設の先頭の横で、ドミノの列から十分離れた所 */
+  restSpot(front, out) {
+    const g = this.game;
+    const ok = (p) => !g.stage.blocked(p.x, p.z, 1.4) && g.stage.inBounds(p.x, p.z, 1.2) && (!g.nav || g.nav.free(g.nav.idx(p.x, p.z), 3));
+    for (const side of [3.2, -3.2, 4.2, -4.2]) { g.sideOf(front, side, out); if (ok(out)) return out; }
+    return null;
+  }
   update(dt) {
     const g = this.game;
     this.cap = 60 + 30 * g.level('basket') + (g.level('train') ? 60 : 0);
     const front = g.frontSlot();
     // プレイヤーが運んで置いたら、その場所に固定（建設の先頭を追わない）
-    if (front && !this.pinned && !this.carried) {
-      const tgt = g.sideOf(front, 3.2, this._v);
-      // 置けない場所なら反対側
-      if (g.stage.blocked(tgt.x, tgt.z, 1.4) || !g.stage.inBounds(tgt.x, tgt.z, 1.2)) g.sideOf(front, -3.2, tgt);
-      const d = this.pos.distanceTo(tgt);
+    const tgt = front && !this.pinned && !this.carried ? this.restSpot(front, this._v) : null;
+    if (tgt) {
+      const d = Math.hypot(tgt.x - this.pos.x, tgt.z - this.pos.z);
       if (d > 6) this.moving = true;
       if (this.moving) {
-        const step = Math.min(d, 8 * g.odMult() * dt);
-        if (d > 1e-3) this.pos.addScaledVector(tgt.sub(this.pos).normalize(), step);
-        if (d < 0.1) this.moving = false;
+        // ドミノの列・家具をよけて移動（貫通しない）。道がなければその場で待つ
+        this.pf ||= new PathFollower(2);
+        const wp = g.nav && d > 1.5 ? this.pf.next(g.nav, this.pos, tgt, g.time) : tgt;
+        if (wp) {
+          const sx = wp.x - this.pos.x, sz = wp.z - this.pos.z, sd = Math.hypot(sx, sz);
+          const step = Math.min(sd, 8 * g.odMult() * dt);
+          if (sd > 1e-3) { this.pos.x += (sx / sd) * step; this.pos.z += (sz / sd) * step; }
+        }
+        if (d < 0.1) { this.moving = false; this.pf.reset(); }
       }
-    }
+    } else if (this.moving) this.moving = false;
     if (!this.carried) this.pos.y = g.stage.heightAt(this.pos.x, this.pos.z);
+    this.syncCollider();
     const show = Math.min(24, Math.ceil(this.count / Math.max(1, this.cap / 24)));
     for (let i = 0; i < 24; i++) this.minis[i].visible = i < show;
   }
@@ -102,12 +131,16 @@ export class Machine {
     this.hopper = 0; this.timer = 0; this.armT = 1; this.placed = 0; this.direct = 0; this.notice = 0;
     this._v = new THREE.Vector3();
   }
-  rate() { const lv = this.game.level('machine'); return lv <= 0 ? 0 : (2.5 + 1.5 * (lv - 1)) * (this.game.evolved('fastLine') ? 2 : 1); }
+  rate() { const lv = this.game.machineActive() ? this.game.level('machine') : 0; return lv <= 0 ? 0 : (2.5 + 1.5 * (lv - 1)) * (this.game.evolved('fastLine') ? 2 : 1); }
   update(dt) {
     const g = this.game;
-    const lv = g.level('machine');
+    const lv = g.machineActive() ? g.level('machine') : 0;
     this.group.visible = lv > 0;
-    if (lv <= 0) return;
+    if (lv <= 0) {
+      // 休止中（ステージ1・2）：ホッパーに残ったドミノは倉庫へ返す（総数は変えない）
+      if (this.hopper > 0) { g.stock += this.hopper; this.hopper = 0; }
+      return;
+    }
     this.conveyor.visible = g.evolved('fastLine');
     const od = g.odMult();
     const cap = 20 + 12 * lv;
@@ -163,12 +196,25 @@ export class Train {
     if (lv <= 0) return;
     const cap = 20 * (lv + 1);
     const home = g.depots[0].pos;
-    const dest = g.evolved('fastLine') && g.level('machine') ? g.machine.pos : g.crate.pos;
+    const dest = g.evolved('fastLine') && g.machineActive() && g.level('machine') ? g.machine.pos : g.crate.pos;
+    // ドミノの列・家具・資材箱をよけて走る（車体が大きいので、障害物から1単位以上離れた道だけ）
+    this.pf ||= new PathFollower(2);
     const go = (tgt, sp) => {
-      const dx = tgt.x - this.pos.x, dz = tgt.z - this.pos.z, d = Math.hypot(dx, dz);
-      if (d < 2.4) return true;
-      this.pos.x += (dx / d) * Math.min(d, sp * dt); this.pos.z += (dz / d) * Math.min(d, sp * dt);
-      this.mesh.rotation.y = Math.atan2(dx, dz);
+      const d = Math.hypot(tgt.x - this.pos.x, tgt.z - this.pos.z);
+      if (d < 2.4) { this.pf.reset(); return true; }
+      const wp = g.nav ? this.pf.next(g.nav, this.pos, tgt, g.time) : tgt;
+      if (!wp) {
+        // 道がない：ドミノの列や家具を貫通せず、その場で待つ（荷物は倉庫に戻す）
+        this.waitT = (this.waitT || 0) + dt;
+        if (this.waitT > 6 && this.load > 0) { g.stock += this.load; this.load = 0; this.state = 'load'; g.fx.floatAt(this.pos.clone().setY(2.4), '🚂 線路がふさがれて届けられない…', 'warn', 2); }
+        if (this.waitT > 6) this.waitT = 0;
+        return false;
+      }
+      this.waitT = 0;
+      const dx = wp.x - this.pos.x, dz = wp.z - this.pos.z, dd = Math.hypot(dx, dz) || 1;
+      this.pos.x += (dx / dd) * Math.min(dd, sp * dt); this.pos.z += (dz / dd) * Math.min(dd, sp * dt);
+      let dy = Math.atan2(dx, dz) - this.mesh.rotation.y; dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+      this.mesh.rotation.y += dy * Math.min(1, dt * 6);
       return false;
     };
     const sp = 9 * g.odMult();
@@ -198,23 +244,89 @@ export class Factory {
     g.add(new THREE.Mesh(rbox(5, 3.6, 4, 0.3), MAT.plastic('#5c7cfa')).translateY(1.8));
     const roof = new THREE.Mesh(new THREE.ConeGeometry(3.6, 2, 4), MAT.plastic('#e8423b')); roof.position.y = 4.6; roof.rotation.y = Math.PI / 4; g.add(roof);
     const chim = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, 2.4, 12), MAT.metal('#868e96')); chim.position.set(1.5, 5.2, -0.8); g.add(chim);
-    this.gear = new THREE.Mesh(new THREE.TorusGeometry(0.9, 0.25, 6, 10), MAT.metal('#ffd43b')); this.gear.position.set(0, 2.2, 2.05); g.add(this.gear);
+    // 歯車（大小2つがかみ合って回る。製造中だけ回る）
+    const gearGeo = (r, n) => {
+      const sh = new THREE.Group();
+      sh.add(new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.2, 20), MAT.metal('#ffd43b')));
+      for (let i = 0; i < n; i++) { const t = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.2, 0.3), MAT.metal('#ffd43b')); const a = (i / n) * Math.PI * 2; t.position.set(Math.cos(a) * (r + 0.12), 0, Math.sin(a) * (r + 0.12)); t.rotation.y = -a; sh.add(t); }
+      const holder = new THREE.Group(); holder.add(sh); holder.rotation.x = Math.PI / 2; holder.userData.spin = sh; return holder;
+    };
+    this.gear = gearGeo(0.8, 10); this.gear.position.set(-0.9, 2.4, 2.1); g.add(this.gear);
+    this.gear2 = gearGeo(0.5, 7); this.gear2.position.set(0.55, 2.95, 2.1); g.add(this.gear2);
+    // 出口とベルトコンベア（工場の右側 → ドミノ箱）
+    g.add(new THREE.Mesh(rbox(0.9, 1.0, 0.2, 0.05), MAT.plastic('#343a40')).translateX(2.55).translateY(0.95).translateZ(1.0));
+    const belt = new THREE.Mesh(rbox(3.4, 0.12, 0.9, 0.04), MAT.plastic('#495057')); belt.position.set(4.2, 0.75, 1.0); g.add(belt);
+    this.rollers = [];
+    for (let i = 0; i < 6; i++) { const r = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 0.95, 8), MAT.metal('#adb5bd')); r.rotation.x = Math.PI / 2; r.position.set(2.7 + i * 0.6, 0.62, 1.0); g.add(r); this.rollers.push(r); }
+    for (const x of [2.8, 5.6]) for (const z of [0.6, 1.4]) g.add(new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.62, 6), MAT.metal('#868e96')).translateX(x).translateY(0.31).translateZ(z));
+    // ドミノ箱（できたドミノがたまる。中身が見える）
+    const box = new THREE.Group(); box.position.set(6.6, 0, 1.0);
+    const wood = MAT.wood('#c98c55');
+    box.add(new THREE.Mesh(rbox(1.6, 0.1, 1.4, 0.03), wood).translateY(0.05));
+    for (const [x, z, w, d] of [[-0.78, 0, 0.08, 1.4], [0.78, 0, 0.08, 1.4], [0, -0.68, 1.6, 0.08], [0, 0.68, 1.6, 0.08]]) box.add(new THREE.Mesh(rbox(w, 0.7, d, 0.02), wood).translateX(x).translateY(0.35).translateZ(z));
+    g.add(box); this.boxObj = box;
+    this.pile = [];
+    for (let i = 0; i < 24; i++) { const m = new THREE.Mesh(miniGeo, miniMats[i % miniMats.length]); m.rotation.set(Math.PI / 2, 0, (Math.random() - 0.5) * 0.6); m.position.set(-0.5 + (i % 4) * 0.33, 0.14 + Math.floor(i / 12) * 0.12, -0.45 + (Math.floor(i / 4) % 3) * 0.45); m.visible = false; box.add(m); this.pile.push(m); }
+    this.items = []; // ベルトの上を流れるドミノ
     shadow(g);
     g.position.copy(pos);
     g.visible = false;
     game.scene.add(g);
-    this.acc = 0;
-    this.puffT = 0;
+    this.acc = 0; this.baseAcc = 0;
+    this.box = 0; // ドミノ箱の中身（総数に含める）
+    this.made = 0; this.running = false;
   }
+  /** 基本補充（おもちゃ箱から、工場なしでも）＋工場の製造 */
   rate() { return CFG.baseSupplyRate + 0.8 * this.game.level('factory'); }
+  factoryRate() { return 0.8 * this.game.level('factory'); }
+  /** ドミノ箱の受け取り場所（運搬担当が取りに来る） */
+  boxPos(out = new THREE.Vector3()) { this.group.updateMatrixWorld(); return out.set(6.6, 0, 2.4).applyMatrix4(this.group.matrixWorld); }
+  take(n) { const k = Math.min(n, this.box); this.box -= k; return k; }
   update(dt) {
     const g = this.game;
-    this.group.visible = g.level('factory') > 0;
+    const lv = g.level('factory');
+    this.group.visible = lv > 0;
     const need = g.unbuiltCount() + g.loosePlannedNeed() + 30;
-    if (g.stock + g.crate.count < need) {
-      this.acc += dt * this.rate() * g.odMult();
-      while (this.acc >= 1) { this.acc -= 1; g.stock++; g.stats.produced++; }
+    const short = g.stock + g.crate.count + this.box + this.items.length < need;
+    // 基本補充（工場とは別。倉庫に直接）
+    if (short) {
+      this.baseAcc += dt * CFG.baseSupplyRate * g.odMult();
+      while (this.baseAcc >= 1) { this.baseAcc -= 1; g.stock++; g.stats.produced++; }
     }
-    this.gear.rotation.z += dt * 3;
+    // 工場：足りないときだけ動く（歯車が回り、1枚ずつベルトに乗る）
+    this.running = lv > 0 && short && g.mode === 'build';
+    if (this.running) {
+      this.acc += dt * this.factoryRate() * g.odMult();
+      while (this.acc >= 1) { this.acc -= 1; this.spawnItem(); }
+    }
+    const sp = this.running || this.items.length ? 1 : 0;
+    this.gear.userData.spin.rotation.y += dt * 2.2 * sp; this.gear2.userData.spin.rotation.y -= dt * 3.5 * sp;
+    for (const r of this.rollers) r.rotation.y += dt * 6 * sp;
+    // ベルトの上を流れて、箱に落ちる（落ちた瞬間に箱の数が増える）
+    for (let i = this.items.length - 1; i >= 0; i--) {
+      const it = this.items[i];
+      it.t += dt;
+      const x = 2.6 + Math.min(1, it.t / 1.6) * 3.4;
+      it.m.position.set(x, 0.92, 1.0);
+      if (it.t > 1.6) {
+        const k = Math.min(1, (it.t - 1.6) / 0.25);
+        it.m.position.set(6.0 + 0.6 * k, 0.92 - 0.7 * k, 1.0);
+        it.m.rotation.z = -k * 1.2;
+        if (k >= 1) {
+          this.group.remove(it.m); this.items.splice(i, 1); this.made++; g.stats.produced++;
+          // 箱がいっぱい（40枚）なら、工場の滑り台で倉庫へ（製造は止めない）
+          if (this.box >= 40) { g.stock++; this.chuted = (this.chuted || 0) + 1; } else this.box++;
+        }
+      }
+    }
+    // 運搬担当がいないときは、工場の係がゆっくり倉庫へ送る（止まらない保証）
+    if (this.box > 0 && g.level('carrier') === 0) { this.chute = (this.chute || 0) + dt * 0.6; while (this.chute >= 1 && this.box > 0) { this.chute -= 1; this.box--; g.stock++; } }
+    for (let i = 0; i < this.pile.length; i++) this.pile[i].visible = i < Math.min(this.box, 24);
+  }
+  spawnItem() {
+    const m = new THREE.Mesh(miniGeo, miniMats[(this.made + this.items.length) % miniMats.length]);
+    m.rotation.set(Math.PI / 2, 0, 0); m.castShadow = true;
+    this.group.add(m);
+    this.items.push({ m, t: 0 });
   }
 }

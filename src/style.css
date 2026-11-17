@@ -201,3 +201,14 @@ body.mode-gacha #hud-tr { opacity: 0; pointer-events: none; }
 #bottom { pointer-events: none; }
 #bottom button, #bottom .tools, #bottom .run-btn, #bottom #piece-pop, #bottom .bt-row > * { pointer-events: auto; }
 #bottom #progress-line, #bottom #tool-hint, #bottom #warns { pointer-events: none; }
+
+/* Ver.0.5：最初のガチャの「おすすめ理由」 */
+.g3-reason { margin: 4px 0 2px; padding: 4px 6px; border-radius: 6px; background: #fff3bf; color: #7a4b00; font-weight: 800; font-size: 12px; line-height: 1.35; }
+/* 序盤の「↺ 最初から並べ直す」：右下からすべり出る */
+#b-restart { position: absolute; right: 18px; bottom: 120px; z-index: 6; padding: 10px 16px; border-radius: 22px; border: none; font: inherit; font-weight: 800; font-size: 15px; color: #fff; background: linear-gradient(180deg, #4dabf7, #1c7ed6); box-shadow: 0 6px 18px rgba(0,0,0,.35); cursor: pointer; transform: translateX(calc(100% + 40px)); opacity: 0; transition: transform .45s cubic-bezier(.2,.9,.3,1.2), opacity .3s; pointer-events: none; }
+#b-restart.show { transform: translateX(0); opacity: 1; pointer-events: auto; }
+#b-restart small { display: block; font-size: 11px; font-weight: 600; opacity: .85; }
+body.mode-run #b-restart, body.mode-gacha #b-restart { transform: translateX(calc(100% + 40px)); opacity: 0; pointer-events: none; }
+
+#follow-chip { position: absolute; top: 58px; left: 50%; transform: translateX(-50%); z-index: 6; padding: 5px 12px; border-radius: 14px; background: rgba(20,22,30,.7); color: #fff; font-size: 12px; font-weight: 700; pointer-events: none; }
+body.mode-run #follow-chip, body.mode-gacha #follow-chip { display: none; }

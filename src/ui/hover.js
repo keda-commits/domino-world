@@ -53,8 +53,18 @@ function describeWorker(game, w) {
   const rows = [['いま', st], ['Lv', `${part ? part.lv : '-'}`], ['速さ', `×${w.speed.toFixed(2)}`]];
   if (['builder', 'carrier', 'collector'].includes(w.role)) rows.push(['運べる量', `${w.capacity}枚（持っている：${w.load}）`]);
   if (w.role === 'stopperCrew') rows.push(['ストッパー', `${game.stoppers.length}個 設置済み`]);
-  if (w.role === 'restorer') rows.push(['対応', '事故で倒れたドミノを素早く起こす']);
+  if (w.role === 'restorer') rows.push(['対応', '事故現場へ走り、マジックハンドで手の届く範囲を続けて起こす'], ['いま', w.standby ? '事故現場で待機中' : w.state === 'walk' ? '移動中' : '作業中']);
+  if (w.role === 'restorer' || w.role === 'collector') rows.push(['起こした数', `${w.restored || 0}枚`]);
+  if (w.role === 'collector') rows.push(['対応', '散らばったドミノを拾って倉庫へ。近くの倒れたドミノも手で起こす']);
   if (w.role === 'guard') rows.push(['対応', '警報でルンバの進路にバリケード']);
+  if (w.trait) {
+    const t = w.trait, tags = [];
+    if (t.lazy > 0.66) tags.push('のんびり屋'); if (t.sporty > 0.66) tags.push('体育会系'); if (t.playful > 0.66) tags.push('遊び好き');
+    rows.push(['性格', tags.join('・') || 'まじめ']);
+    const FUN = { pushup: '腕立て伏せ中', dumbbell: 'ダンベル中', sit: 'ひと休み中', nap: '昼寝中', kick: 'ボール遊び中', pretend: 'ごっこ遊び中', chase: '追いかけっこ中', squabble: 'けんか中', fakework: '働いているふり…', drill: '点検・敬礼中' };
+    if (w.funKind) rows.push(['いま', (w.slacking ? 'サボり：' : '休けい：') + (FUN[w.funKind] || '休けい')]);
+    if (w.slacks) rows.push(['サボった回数', `${w.slacks}回（レベルが上がると減る）`]);
+  }
   return { title: `${ROLE_ICON[w.role] || '🧑'} ${part ? part.name : w.role}`, rows, note: part ? part.desc : '' };
 }
 
@@ -85,7 +95,7 @@ export function describeAt(game, hand, ray) {
   for (const th of game.threats || []) add(th.group, () => th.describe());
   for (const dp of game.depots) add(dp.mesh, () => ({ title: '🧸 おもちゃ箱（倉庫）', rows: [['在庫', `${game.stock}枚`]], note: 'ドラッグでドミノを1枚取り出せる' }));
   add(game.crate.group, () => ({ title: '📦 前線の資材箱', rows: [['中身', `${game.crate.count} / ${game.crate.cap}枚`]], note: '建設の先頭についていく。ドラッグで取り出せる' }));
-  if (game.level('machine')) add(game.machine.group, () => describeFacility(game, 'machine', [['ホッパー', `${game.machine.hopper}枚`]]));
+  if (game.machineActive() && game.level('machine')) add(game.machine.group, () => describeFacility(game, 'machine', [['ホッパー', `${game.machine.hopper}枚`]]));
   if (game.level('train')) add(game.train.mesh || game.train.group, () => describeFacility(game, 'train', [['積み荷', `${game.train.load}枚`]]));
   if (game.level('factory')) add(game.factory.group, () => describeFacility(game, 'factory'));
   if (game.tower) add(game.tower, () => describeFacility(game, 'watchtower', [['見張り半径', `${game.watchRadius()}`]]));

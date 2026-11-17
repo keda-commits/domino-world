@@ -5,8 +5,8 @@ import { STAGES } from '../world/stages.js';
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => Math.floor(n).toLocaleString('ja-JP');
 const ROLE_LABEL = { builder: '👷 建設担当', carrier: '📦 運搬担当', collector: '🧺 回収担当', stopperCrew: '🦺 ストッパー設置係', restorer: '🚑 復旧係', guard: '👮 警備係' };
-const PIECE_ICON = { bell: '🔔', barricade: '🚧', sensor: '📡' };
-const STAGE_PIECES = ['bell', 'barricade', 'sensor'];
+const PIECE_ICON = { bell: '🔔', barricade: '🚧', sensor: '📡', footbridge: '🪜' };
+const STAGE_PIECES = ['footbridge', 'bell', 'barricade', 'sensor'];
 
 /** 画面の HUD・メニュー（コンパクト版） */
 export class UI {
@@ -20,6 +20,7 @@ export class UI {
     document.querySelectorAll('[data-rv]').forEach((b) => (b.onclick = () => h.setRunView(b.dataset.rv)));
     $('b-run').onclick = () => h.run();
     $('b-rewind').onclick = () => h.rewind();
+    $('b-restart').onclick = () => h.earlyRestart();
     const tidy = $('b-tidy');
     tidy.onpointerdown = (e) => { e.preventDefault(); h.tidyHold(true); };
     ['pointerup', 'pointerleave', 'pointercancel'].forEach((ev) => tidy.addEventListener(ev, () => h.tidyHold(false)));
@@ -44,7 +45,7 @@ export class UI {
     const pop = $('piece-pop');
     if (t === 'pieces') {
       const types = STAGE_PIECES.filter((p) => this.g.level(p) > 0);
-      pop.innerHTML = types.length ? types.map((p) => `<button data-piece="${p}">${PIECE_ICON[p]} ${PIECE_LABEL[p]}（残り${this.g.placeableCount(p) - this.g.placeableUsed(p)}）</button>`).join('') : '<span style="font-size:12px;color:#d9c9b6">ガチャで警報ベル・バリケード・接近センサーを手に入れると置けます（ステージ2）</span>';
+      pop.innerHTML = types.length ? types.map((p) => `<button data-piece="${p}">${PIECE_ICON[p]} ${PIECE_LABEL[p]}（残り${this.g.placeableCount(p) - this.g.placeableUsed(p)}）</button>`).join('') : '<span style="font-size:12px;color:#d9c9b6">ガチャで歩道橋・防衛設備を手に入れると置けます</span>';
       pop.querySelectorAll('[data-piece]').forEach((b) => (b.onclick = () => this.h.setTool('piece:' + b.dataset.piece)));
       pop.classList.remove('hidden');
     } else if (!t.startsWith('piece:')) pop.classList.add('hidden');
@@ -53,6 +54,7 @@ export class UI {
   setPaused(p) { $('b-pause').textContent = p ? '▶' : '⏸'; $('b-pause').classList.toggle('on', p); }
   setSpeed(s) { document.querySelectorAll('[data-speed]').forEach((b) => b.classList.toggle('on', +b.dataset.speed === s)); }
   setView(v) { document.querySelectorAll('[data-view]').forEach((b) => b.classList.toggle('on', b.dataset.view === v)); }
+  setFollow(label) { const el = $('follow-chip'); el.classList.toggle('hidden', !label); if (label) el.textContent = `📷 ${label}を追いかけ中（ドラッグ・WASDで解除）`; }
   setRunView(v) { document.querySelectorAll('[data-rv]').forEach((b) => b.classList.toggle('on', b.dataset.rv === v)); }
 
   // ---------------- 定期更新 ----------------
@@ -86,7 +88,7 @@ export class UI {
     const marks = (g.checkpoints || []).map((c) => `<div class="mk ${c.done ? 'done' : ''}" style="left:${(c.slotIndex / total) * 100}%" title="${c.def.name}">${c.index + 1}</div>`).join('') + `<div class="mk goal" style="left:100%">🏁</div>`;
     if (marks !== this._marks) { $('pl-marks').innerHTML = marks; this._marks = marks; }
     const crew = g.workers.list.length;
-    $('pl-text').innerHTML = `建設 <b>${fmt(frontIdx)}</b> / ${fmt(total)} 個 ・ 在庫 ${fmt(g.stock + g.crate.count)} ・ 人員 ${crew}人${g.level('machine') ? ' ＋ 自動設置機' : ''} ・ 最長連鎖 ${fmt(g.records[g.stageId].best)}`;
+    $('pl-text').innerHTML = `建設 <b>${fmt(frontIdx)}</b> / ${fmt(total)} 個 ・ 在庫 ${fmt(g.stock + g.crate.count)} ・ 人員 ${crew}人${g.machineActive() && g.level('machine') ? ' ＋ 自動設置機' : ''} ・ 最長連鎖 ${fmt(g.records[g.stageId].best)}`;
     // 小さな警告（確認ダイアログの代わり）
     const w = [];
     if (g.hint && g.time < g.hint.until) w.push(`<span class="hint">${g.hint.text}</span>`);
@@ -104,6 +106,7 @@ export class UI {
     $('b-tidy').disabled = !building;
     $('b-rewind').disabled = !building || g.rewinds <= 0 || !g.snapshot;
     $('rewind-sub').textContent = `×${g.rewinds}`;
+    $('b-restart').classList.toggle('show', building && !g.gachaActive && g.canEarlyRestart());
     // 連鎖中
     const run = g.run;
     document.body.classList.toggle('mode-run', !!run && run.kind === 'main');
@@ -184,7 +187,7 @@ export class UI {
       const counts = {};
       for (const w of g.workers.list) { const c = (counts[w.role] ||= { n: 0, busy: 0 }); c.n++; if (w.state === 'walk' || (w.state === 'act' && w.pose !== 'idle' && w.pose !== 'shrug')) c.busy++; }
       html += '<table>' + Object.keys(ROLE_LABEL).filter((r) => counts[r]).map((r) => `<tr><td>${ROLE_LABEL[r]}</td><td>${counts[r].busy} / ${counts[r].n}人 作業中</td></tr>`).join('');
-      if (g.level('machine')) html += `<tr><td>🚜 自動設置機</td><td>${g.machine.hopper ? `稼働中（ホッパー${g.machine.hopper}）` : '補給待ち'}</td></tr>`;
+      if (g.machineActive() && g.level('machine')) html += `<tr><td>🚜 自動設置機</td><td>${g.machine.hopper ? `稼働中（ホッパー${g.machine.hopper}）` : '補給待ち'}</td></tr>`;
       if (g.level('train')) html += `<tr><td>🚂 運搬列車</td><td>${g.train.load ? '運搬中' : '積み込み'}</td></tr>`;
       html += `<tr><td>🦺 ストッパー</td><td>${g.stoppers.length}個${g.stoppers.some((s) => s.gate) ? '（ゲート）' : ''}</td></tr><tr><td>🧱 在庫</td><td>${fmt(g.stock)}（前線 ${g.crate.count}）</td></tr></table>`;
       if (!g.workers.list.length) html += '<p>まだ誰もいません。最初のガチャで建設担当が加わります。</p>';

@@ -78,6 +78,11 @@ export function partModel(id) {
       for (let i = 0; i < 4; i++) { const l = add(mesh(new THREE.SphereGeometry(0.4, 14, 10), MAT.plastic('#3fd16b'), Math.cos(i * Math.PI / 2) * 0.4, 1, Math.sin(i * Math.PI / 2) * 0.4)); l.scale.y = 0.3; }
       add(mesh(new THREE.CylinderGeometry(0.06, 0.06, 1, 6), MAT.plastic('#2b8a3e'), 0, 0.5, 0));
       break;
+    case 'xpPack': {
+      const st = new THREE.Shape(); for (let i = 0; i < 10; i++) { const a = (i / 10) * Math.PI * 2 - Math.PI / 2, r = i % 2 ? 0.32 : 0.75; st[i ? 'lineTo' : 'moveTo'](Math.cos(a) * r, Math.sin(a) * r); }
+      add(mesh(new THREE.ExtrudeGeometry(st, { depth: 0.25, bevelEnabled: true, bevelSize: 0.05, bevelThickness: 0.05 }), MAT.plastic('#ffd43b'), 0, 1, -0.1));
+      break;
+    }
     case 'rewind': {
       add(mesh(new THREE.CylinderGeometry(0.12, 0.12, 1.2, 10), MAT.metal('#f2c14e'), 0, 0.6, 0));
       for (const s of [-1, 1]) { const w = add(mesh(new THREE.TorusGeometry(0.4, 0.12, 10, 20), MAT.metal('#f2c14e'), s * 0.45, 1.3, 0)); w.rotation.y = Math.PI / 2; }
@@ -323,11 +328,11 @@ export class GachaShow {
           const ready = Object.entries(e.requires).every(([k, v]) => (k === p.id ? lv + 1 : P.lv(k)) >= v);
           return `<div class="g3-syn ${ready ? 'ready' : ''}">${ready ? '✨ これで' : '🔧'} ${e.icon}${e.name}${ready ? 'が作れる！' : '：' + parts.join('・')}</div>`;
         }).join('');
-        html = `${lv === 0 ? '<div class="g3-new">NEW</div>' : ''}${p.guaranteed ? '<div class="g3-tag">おすすめ</div>' : ''}
+        html = `${lv === 0 && !part.consumable ? '<div class="g3-new">NEW</div>' : ''}${p.guaranteed ? '<div class="g3-tag">おすすめ</div>' : ''}
           <div class="g3-cat" style="color:${CATEGORY[part.category].color}">${CATEGORY[part.category].icon} ${CATEGORY[part.category].label}</div>
           <div class="g3-name">${part.icon} ${part.name}</div>
-          <div class="g3-lv">${part.consumable ? `所持 ${g.rewinds} → ${g.rewinds + 2}` : lv === 0 ? '新しく加わる！' : `Lv.${lv} → <b>Lv.${lv + 1}</b>`}</div>
-          <div class="g3-desc">${part.desc(lv)}</div>${syn}`;
+          <div class="g3-lv">${p.id === 'xpPack' ? '経験値 +30' : part.consumable ? `所持 ${g.rewinds} → ${g.rewinds + 2}` : lv === 0 ? '新しく加わる！' : `Lv.${lv} → <b>Lv.${lv + 1}</b>`}</div>
+          ${p.reason ? `<div class="g3-reason">${p.reason}</div>` : ''}<div class="g3-desc">${part.desc(lv)}</div>${syn}`;
       }
       c.innerHTML = html + `<div class="g3-key">${it.i + 1}</div>`;
       c.onclick = () => this.choose(it);
@@ -443,7 +448,7 @@ export class GachaShow {
     this.deliverTime = 1.0;
     if (spawned.length) {
       // 新しい人：箱から飛び出して現場へ走っていく
-      for (const w of spawned) { w.pos.copy(where).add(new THREE.Vector3((Math.random() - 0.5) * 0.6, 0, 0.8)); w.act(0.9, 'cheer', () => w.goHome()); }
+      for (const w of spawned) { w.pos.copy(where).add(new THREE.Vector3((Math.random() - 0.5) * 0.6, 0, 0.8)); w.act(0.9, 'cheer', () => w.think()); }
       this.deliverTime = 1.3;
     } else if (g.lastSpawnTarget) {
       // 設備：現場の場所をカメラで見せる

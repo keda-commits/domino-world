@@ -14,9 +14,9 @@ export const CAMP_INFO = {
   storage: { label: '倉庫（収納棚）', color: '#9c6b3a', icon: '🗄' },
 };
 // 役割 → 待機所
-export const ROLE_CAMP = { builder: 'builders', carrier: 'logistics', collector: 'logistics', stopperCrew: 'safety', restorer: 'safety', guard: 'safety' };
+export const ROLE_CAMP = { builder: 'builders', carrier: 'logistics', collector: 'logistics', stopperCrew: 'safety', restorer: 'safety', guard: 'safety', soldier: 'safety' };
 // 小型パーツ（収納棚に並ぶもの）
-export const SMALL_PARTS = ['boots', 'basket', 'level', 'clover', 'magnet', 'rewind', 'bell', 'barricade', 'sensor'];
+export const SMALL_PARTS = ['boots', 'basket', 'level', 'clover', 'magnet', 'rewind', 'bell', 'barricade', 'sensor', 'footbridge'];
 
 function labelTexture(text, color, icon) {
   const c = document.createElement('canvas'); c.width = 512; c.height = 160;

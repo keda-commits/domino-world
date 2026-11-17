@@ -15,7 +15,7 @@ export const STAGES = {
     goalText: 'スタートからの連鎖でゴールベルを鳴らす',
     target: 880, // 設計規模（クリア条件ではない）
     courseVer: 2, // Ver.0.4 で設計図を作り直した
-    bounds: { minX: -48, maxX: 48, minZ: -32, maxZ: 32 },
+    bounds: { minX: -57.6, maxX: 57.6, minZ: -38.4, maxZ: 38.4 }, // Ver.0.5：約20%広く（コースはそのまま、壁ぎわに作業スペース）
     floor: { w: 120, d: 100, tone: 'light' },
     start: { x: -40.5, z: -17, yaw: Math.PI / 2 },
     goal: { x: 41.5, z: 25, yaw: Math.PI / 2, type: 'bell' },
@@ -23,14 +23,19 @@ export const STAGES = {
     markers: [],
     chests: [],
     gachaMachine: null,
-    towerSpot: { x: 14, z: 29.5 }, hqSpot: { x: -8, z: 29.5 },
-    gachaSpot: { x: -30, z: -28.5, yaw: 0 },
+    towerSpot: { x: 14, z: 35.9 }, hqSpot: { x: -8, z: 35.9 },
+    gachaSpot: { x: -30, z: -34.9, yaw: 0 },
     // 獲得物の行き先（看板つき）
-    camps: { builders: { x: -14, z: -26 }, logistics: { x: -40, z: -28.5 }, safety: { x: -8, z: 29.5 }, machines: { x: 19, z: -26 }, storage: { x: 8, z: -30.4, yaw: 0 } },
-    guardPosts: [[-20, -21], [10, 29], [30, 29]],
+    camps: { builders: { x: -12, z: -30 }, logistics: { x: -40, z: -29 }, safety: { x: -8, z: 34 }, machines: { x: 19, z: -31 }, storage: { x: 8, z: -36.8, yaw: 0 } },
+    guardPosts: [[-20, -24], [10, 31], [30, 31]],
     roomba: null,
     // いたずらネズミ（中間ゴール2の到達後に登場。机の下の巣穴から出てくる）
-    mouse: { den: { x: 46, z: -29 }, afterCheckpoint: 2, interval: [55, 85] },
+    mouse: { den: { x: 55.6, z: -35.4 }, afterCheckpoint: 2, interval: [55, 85] },
+    // Ver.0.5：レベル5からいたずらロボット、レベル7から暴走ミニカー（それぞれ別の防衛が効く）
+    robot: { home: { x: -52, z: 12 }, minLevel: 5, interval: [70, 100], firstDelay: 35 },
+    car: { garage: { x: 53, z: -8 }, minLevel: 7, interval: [80, 120], firstDelay: 45, speed: 13 },
+    factorySpot: { x: -54, z: -33.5 }, // 工場：スタート側の倉庫の近く（できたドミノをすぐ運べる）
+    soldierPosts: [[-8, -24], [22, 31], [-26, 31], [48, -22], [6, 31]], // 初期の持ち場（敵の出どころから離れている。プレイヤーがつかんで動かす）
     // 中間ゴール：序盤は近く、後半は建設力の成長に合わせて間隔を広げる
     checkpoints: [
       { at: 30, type: 'bell', name: 'ちいさなベル' },
@@ -50,7 +55,7 @@ export const STAGES = {
     title: 'ルンバが来たぞ！',
     goalText: 'ルンバから守り抜き、連鎖で巨大からくり装置を起動する',
     target: 1300, // 設計規模（クリア条件ではない）
-    bounds: { minX: -74, maxX: 74, minZ: -47, maxZ: 47 },
+    bounds: { minX: -88.8, maxX: 88.8, minZ: -56.4, maxZ: 56.4 }, // Ver.0.5：約20%広く（コースはそのまま）
     floor: { w: 220, d: 160, tone: 'dark' },
     start: { x: -71.5, z: -42, yaw: 0 },
     goal: { x: 48, z: 41, yaw: Math.PI / 2, type: 'machine' },
@@ -58,15 +63,16 @@ export const STAGES = {
     markers: [],
     chests: [],
     gachaMachine: null,
-    towerSpot: { x: -52, z: 10 }, hqSpot: { x: -44, z: 43.5 },
-    gachaSpot: { x: -28, z: -41, yaw: 0 },
+    towerSpot: { x: -52, z: 10 }, hqSpot: { x: -44, z: 51 },
+    gachaSpot: { x: -28, z: -50.4, yaw: 0 },
     // ルンバ以外の脅威：ソファの下のいたずらネズミ（局所）／転がるゴムボール（短時間・局所）
-    mouse: { den: { x: 5, z: -42.5 }, afterCheckpoint: 0, interval: [60, 95] },
-    ball: { rest: { x: -20, z: 38 }, radius: 1.3, speed: 13, targets: [[-10, -12], [20, 0], [0, -24], [30, -14], [-30, 4]], interval: [75, 115], firstDelay: 55 },
-    camps: { builders: { x: -62, z: 6 }, logistics: { x: -55, z: 30 }, safety: { x: -44, z: 40 }, machines: { x: 57, z: 7 }, storage: { x: 52.5, z: -44.8, yaw: 0 } },
+    mouse: { den: { x: 5, z: -51.9 }, afterCheckpoint: 0, interval: [60, 95] },
+    ball: { rest: { x: -20, z: 46 }, radius: 1.3, speed: 13, targets: [[-10, -12], [20, 0], [0, -24], [30, -14], [-30, 4]], interval: [75, 115], firstDelay: 55 },
+    camps: { builders: { x: -62, z: 6 }, logistics: { x: -64, z: 44 }, safety: { x: -44, z: 48 }, machines: { x: 70, z: 7 }, storage: { x: 52.5, z: -54.2, yaw: 0 } },
+    factorySpot: { x: -80, z: 29 },
     guardPosts: [[-48, 14], [0, 25.5], [52, 10], [20, -36], [-30, -37]],
     roomba: {
-      dock: { x: 62, z: -42, yaw: 0 },
+      dock: { x: 62, z: -51.4, yaw: 0 },
       radius: 3.0,
       // 巡回パターン（交互に実行・事前に床へ予告表示）
       patterns: [
@@ -182,7 +188,7 @@ class StageRuntime {
 
   inBounds(x, z, m = 0) { const b = this.bounds; return x >= b.minX + m && x <= b.maxX - m && z >= b.minZ + m && z <= b.maxZ - m; }
   /** 建設できない場所か（家具・おもちゃ・設備） */
-  blocked(x, z, m = 0, forRoomba = false) {
+  blocked(x, z, m = 0, forRoomba = false, ignoreMovable = false) {
     for (const o of this.obstacles) {
       if (forRoomba ? !o.roomba : !o.build) continue;
       if (o.r != null) { if ((x - o.x) ** 2 + (z - o.z) ** 2 < (o.r + m) ** 2) return true; continue; }
@@ -191,7 +197,7 @@ class StageRuntime {
       const lx = dx * c + dz * s, lz = -dx * s + dz * c;
       if (Math.abs(lx) < o.hw + m && Math.abs(lz) < o.hd + m) return true;
     }
-    for (const e of this.extraBlockers || []) if (e(x, z, m, forRoomba)) return true;
+    for (const e of this.extraBlockers || []) if (e(x, z, m, forRoomba, ignoreMovable)) return true;
     return false;
   }
   heightAt(x, z) {
@@ -256,26 +262,26 @@ function buildStage1(st) {
   const knob = new THREE.Mesh(new THREE.SphereGeometry(0.5, 12, 8), P.MAT.metal('#d8b46a')); st.add(knob, b.maxX + 0.2, 10, 6, 10);
   // ネズミの巣穴（右の壁の下）
   const hole = new THREE.Mesh(new THREE.CircleGeometry(1.1, 24, 0, Math.PI), new THREE.MeshBasicMaterial({ color: '#120c08' }));
-  st.add(hole, b.maxX + 0.35, -29, -Math.PI / 2, 0.02);
+  st.add(hole, b.maxX + 0.35, -35.4, -Math.PI / 2, 0.02);
 
   const rugM = st.add(P.rug(16, 11, ['#d9534f', '#f0c05a', '#3f8f8a', '#7a5ea8', '#f0c05a']), 2, 4);
   rugM.material.normalMap = fabricNormal([6, 6]); rugM.material.normalScale.set(1.5, 1.5); rugM.material.roughness = 1;
   // ラグは見た目だけ（薄い）。物理の段差を作ると縁に沿ったドミノが傾いて連鎖が止まるため
   rugM.scale.y = 0.4; rugM.position.y = 0.016;
 
-  st.add(P.bed(16, 12), -38, 23); st.rect(-38, 23, 8.2, 6.2, 0, 6);
-  st.group.add(model('SchoolDesk_01', { width: 18, x: 34, z: -27.5 }));
-  for (const sx of [-1, 1]) for (const sz of [-1, 1]) st.rect(34 + sx * 7.6, -27 + sz * 3.1, 0.9, 0.9, 0, 10);
-  st.group.add(model('SchoolChair_01', { width: 8, x: 33, z: -20.5, yaw: Math.PI }));
-  for (const sx of [-1, 1]) for (const sz of [-1, 1]) st.rect(33 + sx * 3, -20 + sz * 3, 0.6, 0.6, 0, 8);
-  st.prop(P.blocks(3, 0), -20, 29.5, 0, { r: 2.2 }, 9, '積み木（あいう）');
-  st.prop(P.blocks(2, 3), 27, 29.5, 0, { r: 2.2 }, 6, '積み木（ABC）');
-  st.prop(P.teddy(0.9), 44, 15, -1.9, { r: 4.8 }, 14, 'くまのぬいぐるみ');
-  st.prop(P.toyCar('#e8423b', 0.8), 38, 30, 0.3, { hw: 3.8, hd: 2.1 }, 4, 'おもちゃの車');
-  st.prop(P.ballToy(3.5), -44.5, -1, 0, { r: 3.6 }, 7, '大きなボール');
-  st.prop(P.ringTower(), 2, -28, 0, { r: 3.2 }, 9, '輪投げタワー');
+  st.add(P.bed(16, 12), -47, 30); st.rect(-47, 30, 8.2, 6.2, 0, 6);
+  st.group.add(model('SchoolDesk_01', { width: 18, x: 42, z: -33.9 }));
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) st.rect(42 + sx * 7.6, -33.4 + sz * 3.1, 0.9, 0.9, 0, 10);
+  st.group.add(model('SchoolChair_01', { width: 8, x: 41, z: -26.9, yaw: Math.PI }));
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) st.rect(41 + sx * 3, -26.4 + sz * 3, 0.6, 0.6, 0, 8);
+  st.prop(P.blocks(3, 0), -24, 35.4, 0, { r: 2.2 }, 9, '積み木（あいう）');
+  st.prop(P.blocks(2, 3), 27, 35.4, 0, { r: 2.2 }, 6, '積み木（ABC）');
+  st.prop(P.teddy(0.9), 52, 15, -1.9, { r: 4.8 }, 14, 'くまのぬいぐるみ');
+  st.prop(P.toyCar('#e8423b', 0.8), 46, 34.5, 0.3, { hw: 3.8, hd: 2.1 }, 4, 'おもちゃの車');
+  st.prop(P.ballToy(3.5), -52, -1, 0, { r: 3.6 }, 7, '大きなボール');
+  st.prop(P.ringTower(), 2, -34.4, 0, { r: 3.2 }, 9, '輪投げタワー');
   // ガチャ専用の展示スペース（建設・人の通り道にしない）
-  st.rect(-30, -24, 6.2, 6, 0, 2, { roomba: true, build: true });
+  st.rect(-30, -30.4, 6.2, 6, 0, 2, { roomba: true, build: true });
 }
 
 function buildStage2(st) {
@@ -294,27 +300,27 @@ function buildStage2(st) {
   const right = st.add(new THREE.Mesh(new THREE.PlaneGeometry(160, 60), wallMat(160, 60, '#efe6da')), b.maxX + 1, 0, -Math.PI / 2); right.position.y = 30; right.receiveShadow = true;
   st.wall(b.minX - 1, -80, b.minX - 1, 80); st.wall(-100, b.minZ - 1, 100, b.minZ - 1); st.wall(b.maxX + 1, -80, b.maxX + 1, 80);
   // 廊下の仕切り壁
-  const pw = new THREE.Mesh(P.rbox(1.5, 30, 40, 0.3), P.MAT.matte('#f6efe4'));
-  st.add(pw, -54, -27, 0, 15);
-  st.rect(-54, -27, 0.75, 20, 0, 30);
+  const pw = new THREE.Mesh(P.rbox(1.5, 30, 49.4, 0.3), P.MAT.matte('#f6efe4'));
+  st.add(pw, -54, -31.7, 0, 15);
+  st.rect(-54, -31.7, 0.75, 24.7, 0, 30);
   const sign = new THREE.Mesh(P.rbox(10, 3, 0.3, 0.2), P.MAT.wood('#e0b07a')); st.add(sign, -54, -8, 0, 22);
   for (let i = 0; i < 3; i++) { const w = st.add(P.windowFrame(22, 20), -40 + i * 45, b.minZ - 0.8); w.position.y = 28; }
 
   const cp = st.add(new THREE.Mesh(P.rbox(56, 0.04, 40, 0.02, 2), pbr('poly_wool_herringbone', [6, 4.5], { maps: ['diff', 'nor_gl'], color: '#9fb0d6', normal: 1.2 })), 5, -8); cp.position.y = 0.02; cp.receiveShadow = true;
 
-  st.group.add(model('sofa_02', { width: 36, x: 5, z: -40.5 })); st.rect(5, -40, 17, 6, 0, 10);
+  st.group.add(model('sofa_02', { width: 36, x: 5, z: -49.9 })); st.rect(5, -49.4, 17, 6, 0, 10);
   st.group.add(model('modern_coffee_table_01', { width: 18, fit: 'z', x: 5, z: -10 }));
   for (const sz of [-1, 1]) st.rect(5, -10 + sz * 8.4, 4.5, 0.6, 0, 6); // V字の脚（両端）。間はルンバが通れる
-  st.add(P.tvStand(28, 6), 70, 0, -Math.PI / 2); st.rect(70, 0, 3, 14, 0, 30);
-  st.group.add(model('wooden_bookshelf_worn', { width: 16, x: 40, z: -44.3 })); st.rect(40, -44.5, 8.2, 2.2, 0, 18);
-  st.prop(P.plant(1), -48, -42, 0, { r: 3.2 }, 10, '植木鉢');
-  st.prop(P.plant(1.1), 69.5, -27, 0, { r: 3.4 }, 10, '植木鉢'); // 充電台への帰り道をふさがない位置
-  st.prop(P.plant(0.9), -68, 44, 0, { r: 3 }, 10, '植木鉢');
+  st.add(P.tvStand(28, 6), 84.8, 0, -Math.PI / 2); st.rect(84.8, 0, 3, 14, 0, 30);
+  st.group.add(model('wooden_bookshelf_worn', { width: 16, x: 40, z: -53.7 })); st.rect(40, -53.9, 8.2, 2.2, 0, 18);
+  st.prop(P.plant(1), -48, -51.4, 0, { r: 3.2 }, 10, '植木鉢');
+  st.prop(P.plant(1.1), 84.3, -27, 0, { r: 3.4 }, 10, '植木鉢'); // 充電台への帰り道をふさがない位置
+  st.prop(P.plant(0.9), -82.8, 53.4, 0, { r: 3 }, 10, '植木鉢');
   st.group.add(model('ArmChair_01', { width: 15, x: 48, z: 26, yaw: -2.3 })); st.rect(48, 26, 7.5, 6.5, -2.3, 10);
-  st.prop(P.toyCar('#1c7ed6', 0.9), -30, 44, 1.2, { hw: 4.2, hd: 2.4 }, 4, 'おもちゃの車');
+  st.prop(P.toyCar('#1c7ed6', 0.9), -30, 53.4, 1.2, { hw: 4.2, hd: 2.4 }, 4, 'おもちゃの車');
   st.prop(P.blocks(4, 2), 30, 12, 0, { r: 2.4 }, 12, '積み木');
-  st.prop(P.teddy(0.7), -64, 30, 1.0, { r: 3.6 }, 10, 'くまのぬいぐるみ');
-  st.add(P.dock(), 62, -44.5); st.rect(62, -44.5, 3.2, 1.2, 0, 3, { roomba: false });
+  st.prop(P.teddy(0.7), -78.8, 39.4, 1.0, { r: 3.6 }, 10, 'くまのぬいぐるみ');
+  st.add(P.dock(), 62, -53.9); st.rect(62, -53.9, 3.2, 1.2, 0, 3, { roomba: false });
 }
 
 function floor(w, d, mat) {
