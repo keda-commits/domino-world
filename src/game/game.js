@@ -157,9 +157,13 @@ export class Game {
     for (const p of this.placed) if (p.type === 'footbridge') this.nav.addBridge(p.a, p.b);
     // ゲーム開始：建設開始地点近くの資材箱にドミノ50個（在庫から「移す」ので総数は増えない）。
     // 資材箱の中身を保存しているセーブ（grab.crate）では保存された数をそのまま使う（再読み込みで増えない）
+    // Ver.0.5.2：補充漏れ（Ver.0.5 の不具合）で空のまま保存された資材箱も、一度だけ在庫から移す（最大50枚。総数は変わらない）。
+    // 修正後に保存した資材箱（refill:2 付き）は、プレイヤーが空にした状態でもそのまま使う
     const savedCrate = data && data.grab && data.grab.crate;
-    if (!savedCrate && this.crate.count === 0 && !this.def.noStartCrate) {
+    const emptyFromBug = savedCrate && savedCrate.n === 0 && savedCrate.refill !== 2;
+    if ((!savedCrate || emptyFromBug) && this.crate.count === 0 && !this.def.noStartCrate) {
       const n = Math.min(50, this.stock); this.stock -= n; this.crate.count += n;
+      if (emptyFromBug && n > 0) this.fx.floatAt(this.crate.pos.clone().setY(2.4), `📦 倉庫から ${n}枚を前線の資材箱へ移しました`, 'coin', 3);
     }
     this.crate.syncCollider(true); // 読み込み時だけ位置を直接合わせる（周りにまだ動くドミノはない）
     this.emit('stageLoaded', id);
@@ -284,7 +288,7 @@ export class Game {
     return {
       layout: MAP_LAYOUT,
       props: (this.propEntries || []).map((e) => e.serialize()),
-      crate: { n: this.crate.count, x: +this.crate.pos.x.toFixed(2), z: +this.crate.pos.z.toFixed(2), pinned: !!this.crate.pinned },
+      crate: { n: this.crate.count, x: +this.crate.pos.x.toFixed(2), z: +this.crate.pos.z.toFixed(2), pinned: !!this.crate.pinned, refill: 2 },
       factory: [+this.factory.group.position.x.toFixed(2), +this.factory.group.position.z.toFixed(2)],
     };
   }
