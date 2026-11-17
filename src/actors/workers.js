@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { PathFollower } from '../game/nav.js';
+const REACH = 1.6; // 復旧係のマジックハンドが届く距離
 import { CFG } from '../config.js';
 import { buildGnome, looseMats } from './gnomeModel.js';
 
@@ -13,6 +14,7 @@ const SAY = {
   stopperCrew: ['ストッパーズ、着任！', '安全第一！', '事故ゼロ宣言！'],
   restorer: ['復旧はおまかせ！', '出動準備よし！'],
   guard: ['警備開始！', 'ルンバは通さない！'],
+  soldier: ['気をつけ！', '持ち場につきます！', 'ドミノは守ります！'],
 };
 
 /**
@@ -60,7 +62,7 @@ export class Gnome {
   act(time, pose, onDone) { this.state = 'act'; this.timer = time; this.pose = pose; this.poseT = 0; this.onDone = onDone; }
   wait(time, pose = 'idle') {
     // 手が空いたら（長めの待ち）自分の待機所へ戻る。ガチャの前などに人が溜まらないように
-    const home = time >= 1 && (pose === 'idle' || pose === 'shrug') && this.game.mode === 'build' && this.role !== 'guard' ? this.game.campPos(this.role) : null;
+    const home = time >= 1 && (pose === 'idle' || pose === 'shrug') && this.game.mode === 'build' && this.role !== 'guard' && this.role !== 'soldier' ? this.game.campPos(this.role) : null;
     if (home && Math.hypot(home.x - this.pos.x, home.z - this.pos.z) > 4) {
       const off = new THREE.Vector3(Math.cos(this.id * 2.4) * 2, 0, Math.sin(this.id * 2.4) * 2).add(home);
       return this.goto(() => off, () => this.act(time, pose, () => this.think()));
@@ -107,6 +109,7 @@ export class Gnome {
       case 'stopperCrew': return this.thinkStopperCrew();
       case 'restorer': return this.thinkRestorer();
       case 'guard': return this.thinkGuard();
+      case 'soldier': return this.thinkSoldier();
     }
     this.wait(1);
   }
@@ -177,20 +180,34 @@ export class Gnome {
   doRestand(d) {
     const g = this.game;
     this.job = d;
-    const fast = this.role === 'restorer' ? (g.evolved('stopperHQ') ? 2.6 : 1.6) : 1;
+    const restorer = this.role === 'restorer';
+    const fast = restorer ? (g.evolved('stopperHQ') ? 3.0 : 2.0) : 1;
     const slot = d.slot;
-    // 向かっている途中にプレイヤーがつかんだ・別の人が片付けた場合は、そのマスの横で止まって考え直す
-    this.goto(() => g.sideOf(d.slot || slot, this.side, tmp), () => {
+    const work = () => {
       if (d.removed || d.claim !== this.id || d.held || !d.slot) { this.releaseJob(); return this.think(); }
       this.face(d.slot);
-      this.act(CFG.restandTime / (this.speed * fast), 'pick', () => {
+      // 復旧係はマジックハンドを伸ばして起こす（回収担当はしゃがんで手で起こす）
+      this.act(CFG.restandTime / (this.speed * fast), restorer ? 'reach' : 'pick', () => {
         this.releaseJob();
         if (d.removed || d.held || !d.slot) return this.think();
-        g.restand(d, this);
-        if (this.role === 'restorer' && Math.random() < 0.15) this.say('復旧完了！');
+        if (g.restand(d, this)) { this.restored = (this.restored || 0) + 1; const st = (g.stats.restoredBy ||= {}); st[this.role] = (st[this.role] || 0) + 1; }
+        if (restorer && Math.random() < 0.08) this.say('復旧完了！');
+        // 復旧係：手の届く範囲に次の倒れたドミノがあれば、歩かずに続けて起こす
+        if (restorer) { const nx = g.findRestandJob(this, REACH + 0.2, true); if (nx) return this.doRestand(nx); }
         this.think();
       });
-    });
+    };
+    if (restorer) {
+      // 現場へは走る。マジックハンドが届く所（REACH）まで来たら止まる
+      const far = Math.hypot(slot.x - this.pos.x, slot.z - this.pos.z);
+      if (far <= REACH) return work();
+      const sp = new THREE.Vector3();
+      this.goto(() => { const s2 = d.slot || slot; return sp.set(s2.x, 0, s2.z); }, work, far > 5 ? 1.6 : 1);
+      this.arriveDist = REACH - 0.15;
+      return;
+    }
+    // 向かっている途中にプレイヤーがつかんだ・別の人が片付けた場合は、そのマスの横で止まって考え直す
+    this.goto(() => g.sideOf(d.slot || slot, this.side, tmp), work);
   }
 
   // ---------- 運搬小人 ----------
@@ -273,6 +290,7 @@ export class Gnome {
   // ---------- 復旧係 ----------
   thinkRestorer() {
     const g = this.game;
+    this.standby = false;
     const cl = g.findClearJob(this);
     if (cl) return this.doClear(cl);
     const rd = g.findRestandJob(this, Infinity, true);
@@ -300,6 +318,14 @@ export class Gnome {
         });
       });
     }
+    // 事故の直後で、まだ起こせない（上に別のドミノが寝ている）ものが残っているなら、持ち場へ帰らず現場で待機
+    const acc = g.pendingAccidentNear && g.pendingAccidentNear(this.pos);
+    if (acc) {
+      this.standby = true;
+      const d = Math.hypot(acc.x - this.pos.x, acc.z - this.pos.z);
+      if (d > 2.5) return this.goto(() => acc, () => this.wait(0.4, 'alarm'), 1.6);
+      return this.wait(0.4, 'idle');
+    }
     this.goto(() => this.home, () => this.wait(1.5, Math.random() < 0.3 ? 'salute' : 'idle'));
   }
 
@@ -315,6 +341,42 @@ export class Gnome {
       }, 1.7);
     }
     this.goto(() => this.home, () => this.wait(1.2, Math.random() < 0.2 ? 'salute' : 'idle'));
+  }
+
+  // ---------- おもちゃの兵隊（Ver.0.5 防衛） ----------
+  thinkSoldier() {
+    const g = this.game;
+    const en = g.soldierTarget(this);
+    if (en) {
+      if (g.defenseStyle === 'push') {
+        // 押し返し型：走って行って盾で押し戻す
+        if (Math.random() < 0.3) this.say('止まれー！', 'warn');
+        this.goto(() => en.pos, () => {
+          this.face2(en.pos);
+          this.act(0.25, 'shove', () => {
+            if (en.repel && en.repel(this.pos, 'shove')) { g.stats.shoves = (g.stats.shoves || 0) + 1; }
+            this.act(0.5, 'salute', () => this.think());
+          });
+        }, 1.8);
+        this.arriveDist = 1.2;
+        return;
+      }
+      // 射撃型：射程（8）まで近づいて、スポンジ弾を撃つ
+      const d = Math.hypot(en.pos.x - this.pos.x, en.pos.z - this.pos.z);
+      if (d > 8) { this.goto(() => en.pos, () => this.think(), 1.5); this.arriveDist = 7.5; return; }
+      this.face2(en.pos);
+      return this.act(0.3 / Math.min(1.5, this.speed), 'aim', () => {
+        this.face2(en.pos);
+        g.darts.fire(this, en);
+        this.act(0.55, 'aim', () => this.think());
+      });
+    }
+    // 持ち場で見張る（ときどき敬礼・見回し）
+    const hd = Math.hypot(this.home.x - this.pos.x, this.home.z - this.pos.z);
+    if (hd > 1.2) return this.goto(() => this.home, () => this.wait(0.8));
+    if (Math.random() < 0.15) return this.act(1.0, 'salute', () => this.think());
+    this.yaw += (Math.random() - 0.5) * 1.5;
+    this.wait(0.6);
   }
 
   face(slot) { this.yaw = Math.atan2(slot.x - this.pos.x, slot.z - this.pos.z); }
@@ -352,6 +414,7 @@ export class Gnome {
   }
   /** 離された（着地した）：少し驚いてから、自然に作業へ戻る */
   dropped(sp = 0) {
+    if (this.role === 'soldier') { this.home = this.pos.clone(); this.say('ここを守ります！'); }
     if (sp > 8) { this.state = 'idle'; this.trip(); return; }
     this.state = 'act'; this.pose = 'surprised'; this.poseT = 0; this.timer = 0.7;
     this.onDone = () => this.think();
@@ -416,8 +479,10 @@ export class Gnome {
         let dx = tgt.x - this.pos.x, dz = tgt.z - this.pos.z;
         const d = Math.hypot(dx, dz);
         const step = CFG.walkSpeed * this.speed * (this.runMult || 1) * dt;
-        if (d <= Math.max(0.08, step)) {
-          this.pos.x = tgt.x; this.pos.z = tgt.z;
+        const ad = this.arriveDist || 0;
+        if (ad ? d <= Math.max(ad, step) : d <= Math.max(0.08, step)) {
+          if (!ad) { this.pos.x = tgt.x; this.pos.z = tgt.z; }
+          this.arriveDist = 0;
           const cb = this.onArrive; this.onArrive = null; this.runMult = 1;
           if (this.pf) this.pf.reset();
           if (cb) cb(); else this.state = 'idle';
@@ -511,6 +576,9 @@ export class Gnome {
       case 'pick': { const k = Math.sin(Math.min(1, this.poseT * 2.5) * Math.PI); lean = 0.8 * k; armL = armR = -0.6 * k - 0.2; break; }
       case 'kneel': { const k = Math.min(1, this.poseT * 4); lean = 0.6 * k; bob = -0.12 * k; legA = 0.9 * k; armL = armR = -1.0; break; }
       case 'salute': armR = -2.5; armRz = 0.9; armL = 0.05; bob = 0.02; break;
+      case 'reach': { const k = Math.sin(Math.min(1, this.poseT * 2.2) * Math.PI); armR = -1.35 - 0.2 * k; armL = -0.4; lean = 0.25 * k; if (m.reacher) m.reacher.scale.y = 1 + 0.6 * k; break; }
+      case 'aim': armR = -1.55; armL = -1.2; spread = -0.1; lean = -0.05; bob = this.poseT < 0.08 ? 0.03 : 0; break;
+      case 'shove': { const k = Math.min(1, this.poseT * 6); armL = -1.5 * k; armR = -1.2 * k; lean = 0.35 * k; legA = 0.4 * k; break; }
       case 'trip': {
         const t = this.poseT;
         if (t < 0.25) lean = (t / 0.25) * 1.45;
@@ -533,6 +601,7 @@ export class Gnome {
     m.pivot.rotation.x = lean;
     m.pivot.position.y = bob;
     this.root.rotation.y = this.yaw;
+    if (m.gun) { const push = this.game.defenseStyle === 'push'; m.gun.visible = !push; m.shield.visible = push; }
     const show = this.pose === 'trip' ? 0 : Math.min(this.load, 6);
     for (let i = 0; i < 6; i++) m.stack[i].visible = i < show;
   }
@@ -545,6 +614,7 @@ export class Gnome {
 
 // goto に「走る」倍率を付けられるように拡張
 Gnome.prototype.goto = function (targetFn, onArrive, runMult = 1) {
+  this.arriveDist = 0;
   this.state = 'walk'; this.targetFn = targetFn; this.onArrive = onArrive; this.runMult = runMult;
 };
 
@@ -554,10 +624,11 @@ export class Workers {
   hire(role, quiet = false) {
     const g = this.game;
     const dep = g.depots[0];
-    const spawn = g.campPos(role) || ((role === 'guard' || role === 'restorer') && g.hqPos ? g.hqPos.clone() : dep.pos.clone());
+    const spawn = role === 'soldier' ? g.soldierPost(this.count('soldier')) : g.campPos(role) || ((role === 'guard' || role === 'restorer') && g.hqPos ? g.hqPos.clone() : dep.pos.clone());
     spawn.x += (Math.random() - 0.5) * 2; spawn.z += 2 + Math.random() * 1.5;
     const gn = new Gnome(role, this.nextId++, g, spawn);
     if (role === 'guard') gn.home = g.guardPost(this.count('guard'));
+    if (role === 'soldier') gn.home = spawn.clone();
     if (!quiet) { const s = SAY[role]; gn.say(s[Math.floor(Math.random() * s.length)]); }
     this.list.push(gn);
     g.addWorkerGrab && g.addWorkerGrab(gn);

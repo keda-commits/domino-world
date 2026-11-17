@@ -33,6 +33,62 @@ export function installDebug(ctx) {
       game.goal.reset();
       return api.buildAll();
     },
+    /**
+     * 防衛の比較テスト（Ver.0.5）：style（'shoot' | 'push'）の兵隊 n 人で、enemy（'mouse' | 'robot'）の攻撃を trials 回受ける。
+     * ほかの敵は止め、毎回コースを建て直して同じ条件にする。結果：防いだ回数・当てられた回数・倒れたドミノ・撃退までの時間
+     */
+    defenseTrial: async (style, enemy, trials = 10, soldiers = 1) => {
+      const { DEFENSE } = await import('./data/parts.js');
+      const g = game, prev = DEFENSE.style; DEFENSE.style = style;
+      g.progress.level = Math.max(g.progress.level, 8);
+      for (const w of [...g.workers.list]) if (w.role === 'soldier') { g.scene.remove(w.root); g.workers.list.splice(g.workers.list.indexOf(w), 1); }
+      g.progress.parts.soldier = 0; api.setPart('soldier', soldiers);
+      const th = g.threats.find((t) => (enemy === 'mouse' ? t.constructor.name === 'Mouse' : t.constructor.name === 'MischiefRobot'));
+      const others = g.threats.filter((t) => t !== th);
+      const out = { style, enemy, trials, blocked: 0, hit: 0, fallen: 0, repelMs: [] };
+      for (let i = 0; i < trials; i++) {
+        api.fresh();
+        others.forEach((t) => { t.timer = 1e9; });
+        if (enemy === 'mouse') { g.flags.mouseTutorialDone = true; g.checkpoints.forEach((c) => (c.done = true)); th.state = 'den'; th.timer = 0.01; th.pos.copy(th.den); }
+        else { th.state = 'home'; th.timer = 0.01; th.pos.copy(th.home); th.stun = 0; th.knock = null; }
+        for (const w of g.workers.list) if (w.role === 'soldier') { w.pos.copy(w.home); w.state = 'idle'; w.think(); }
+        const h0 = (g.stats.mouseHits || 0) + (g.stats.robotHits || 0);
+        let t = 0, startAt = null, repelAt = null;
+        const r0 = (g.stats.mouseRepelled || 0) + (g.stats.robotRepelled || 0);
+        while (t < 40) {
+          g.update(1 / 30); t += 1 / 30;
+          if (startAt == null && (th.state === 'go')) startAt = t;
+          if (repelAt == null && (g.stats.mouseRepelled || 0) + (g.stats.robotRepelled || 0) > r0) repelAt = t;
+          if (t > 3 && (th.state === 'den' || th.state === 'home')) break;
+        }
+        const hit = (g.stats.mouseHits || 0) + (g.stats.robotHits || 0) > h0;
+        if (hit) out.hit++; else out.blocked++;
+        if (repelAt != null && startAt != null) out.repelMs.push(Math.round((repelAt - startAt) * 1000));
+        out.fallen += [...g.dominoes.list].filter((d) => d.toppled).length;
+      }
+      DEFENSE.style = prev;
+      out.avgRepelS = out.repelMs.length ? +(out.repelMs.reduce((a, b) => a + b, 0) / out.repelMs.length / 1000).toFixed(2) : null;
+      delete out.repelMs;
+      return out;
+    },
+    /** 復旧の検証（Ver.0.5）：role（'collector' | 'restorer'）n 人だけにして、orders の位置で事故を起こし、全部起こすまでの秒数 */
+    restorerTrial: (role, n, orders = [300]) => {
+      const g = game, base = { ...g.progress.parts };
+      const fall = () => [...g.dominoes.list].filter((x) => x.toppled || (x.slot && !g.dominoes.isStandingAt(x, x.slot))).length;
+      g.threats.forEach((t) => (t.timer = 1e9));
+      for (const k of ['builder', 'collector', 'restorer', 'carrier', 'stopperCrew', 'soldier']) g.progress.parts[k] = 0;
+      for (const w of [...g.workers.list]) g.scene.remove(w.root);
+      g.workers.list.length = 0; g.progress.parts[role] = n; g.syncPartsToWorld(true);
+      api.fresh();
+      for (const o of orders) { const s = g.course.allSlots.find((x) => x.order === o); g.dominoes.push(s.domino, Math.sin(s.yaw), Math.cos(s.yaw), 0.07); }
+      api.advance(8);
+      const f0 = fall(); let t = 0;
+      while (t < 240 && fall() > 0) { g.update(1 / 20); t += 1 / 20; }
+      const res = { role, n, fallen: f0, left: fall(), sec: +t.toFixed(1), perWorker: g.workers.list.map((w) => w.restored || 0) };
+      for (const w of [...g.workers.list]) g.scene.remove(w.root);
+      g.workers.list.length = 0; Object.assign(g.progress.parts, base); g.syncPartsToWorld(true);
+      return res;
+    },
     restoreAll: () => { let n = 0; while (game.manualRestoreStep()) n++; return n; },
     route: (i) => game.loadSuggested(i),
     run: () => game.startRun(),

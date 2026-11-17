@@ -109,12 +109,16 @@ export class Machine {
     this.hopper = 0; this.timer = 0; this.armT = 1; this.placed = 0; this.direct = 0; this.notice = 0;
     this._v = new THREE.Vector3();
   }
-  rate() { const lv = this.game.level('machine'); return lv <= 0 ? 0 : (2.5 + 1.5 * (lv - 1)) * (this.game.evolved('fastLine') ? 2 : 1); }
+  rate() { const lv = this.game.machineActive() ? this.game.level('machine') : 0; return lv <= 0 ? 0 : (2.5 + 1.5 * (lv - 1)) * (this.game.evolved('fastLine') ? 2 : 1); }
   update(dt) {
     const g = this.game;
-    const lv = g.level('machine');
+    const lv = g.machineActive() ? g.level('machine') : 0;
     this.group.visible = lv > 0;
-    if (lv <= 0) return;
+    if (lv <= 0) {
+      // 休止中（ステージ1・2）：ホッパーに残ったドミノは倉庫へ返す（総数は変えない）
+      if (this.hopper > 0) { g.stock += this.hopper; this.hopper = 0; }
+      return;
+    }
     this.conveyor.visible = g.evolved('fastLine');
     const od = g.odMult();
     const cap = 20 + 12 * lv;
@@ -170,7 +174,7 @@ export class Train {
     if (lv <= 0) return;
     const cap = 20 * (lv + 1);
     const home = g.depots[0].pos;
-    const dest = g.evolved('fastLine') && g.level('machine') ? g.machine.pos : g.crate.pos;
+    const dest = g.evolved('fastLine') && g.machineActive() && g.level('machine') ? g.machine.pos : g.crate.pos;
     // ドミノの列・家具・資材箱をよけて走る（車体が大きいので、障害物から1単位以上離れた道だけ）
     this.pf ||= new PathFollower(2);
     const go = (tgt, sp) => {

@@ -24,6 +24,8 @@ export const ROLE_STYLE = {
   stopperCrew: { body: '#1f5fd0', hat: '#1f6fe0', leg: '#1b2a4a', kind: 'stopper', vest: '#ffd21f' },
   restorer: { body: '#1f5fd0', hat: '#1f6fe0', leg: '#1b2a4a', kind: 'stopper', vest: '#ffffff', cross: true },
   guard: { body: '#16295a', hat: '#1f6fe0', leg: '#101a33', kind: 'stopper', vest: '#ff7a1a', badge: true },
+  // おもちゃの兵隊：赤い上着・白いたすき・黒い筒帽
+  soldier: { body: '#d6336c', hat: '#1b1b3a', leg: '#1b1b3a', kind: 'soldier' },
   watchman: { body: '#1f5fd0', hat: '#1f6fe0', leg: '#1b2a4a', kind: 'stopper', vest: '#9be3ff' },
 };
 
@@ -59,6 +61,13 @@ export function gnomeGeometries(role) {
     parts.push(colored(at(new THREE.SphereGeometry(0.04, 6, 4), 0, 0.46, -0.02), '#ffffff'));
     const beard = new THREE.SphereGeometry(0.13, 10, 8); beard.scale(1, 0.8, 0.6);
     parts.push(colored(at(beard, 0, -0.12, 0.1), '#f4f0e8'));
+  } else if (st.kind === 'soldier') {
+    parts.push(colored(at(new THREE.CylinderGeometry(0.17, 0.19, 0.36, 16), 0, 0.27, 0), st.hat));
+    parts.push(colored(at(new THREE.CylinderGeometry(0.2, 0.2, 0.03, 16), 0, 0.1, 0), '#ffd43b'));
+    parts.push(colored(at(new THREE.BoxGeometry(0.08, 0.1, 0.02), 0, 0.3, 0.18), '#ffd43b'));
+    parts.push(colored(at(new THREE.SphereGeometry(0.045, 8, 6), 0, 0.48, 0), '#e03131'));
+    parts.push(colored(at(new THREE.BoxGeometry(0.06, 0.012, 0.01), -0.065, 0.07, 0.18), '#3a2416'));
+    parts.push(colored(at(new THREE.BoxGeometry(0.06, 0.012, 0.01), 0.065, 0.07, 0.18), '#3a2416'));
   } else {
     // ストッパーズのヘルメット：青＋白ライン＋透明バイザー風＋耳あて
     parts.push(colored(at(half(0.215), 0, 0.02, 0), st.hat));
@@ -77,7 +86,12 @@ export function gnomeGeometries(role) {
     colored(at(new THREE.CapsuleGeometry(0.17, 0.16, 6, 14), 0, 0.55, 0), st.body),
     colored(at(new THREE.CylinderGeometry(0.175, 0.175, 0.05, 14), 0, 0.44, 0), '#5a3b26'),
   ];
-  if (st.vest) {
+  if (st.kind === 'soldier') {
+    // 白いたすき（X字）と金ボタン
+    const b1 = new THREE.BoxGeometry(0.05, 0.36, 0.02); b1.rotateZ(0.6); bodyParts.push(colored(at(b1, 0, 0.56, 0.17), '#ffffff'));
+    const b2 = new THREE.BoxGeometry(0.05, 0.36, 0.02); b2.rotateZ(-0.6); bodyParts.push(colored(at(b2, 0, 0.56, 0.17), '#ffffff'));
+    bodyParts.push(colored(at(new THREE.SphereGeometry(0.025, 6, 4), 0, 0.48, 0.17), '#ffd43b'));
+  } else if (st.vest) {
     // 安全ベスト（反射材ライン）
     bodyParts.push(colored(at(new THREE.CylinderGeometry(0.185, 0.185, 0.2, 14, 1, true), 0, 0.58, 0), st.vest));
     bodyParts.push(colored(at(new THREE.CylinderGeometry(0.19, 0.19, 0.03, 14, 1, true), 0, 0.55, 0), '#e0e0e0'));
@@ -147,7 +161,28 @@ export function buildGnome(role) {
   const tip = new THREE.Mesh(new THREE.SphereGeometry(0.035, 8, 6), new THREE.MeshStandardMaterial({ color: '#ff3b3b', emissive: '#ff3b3b' }));
   tip.position.y = 0.16; antenna.add(tip);
   antenna.position.set(0.14, 0.32, -0.05); antenna.visible = false; head.add(antenna);
-  return { root, pivot, body, head, armL, armR, legL, legR, carry, stack, held, boots, gold, pack, antenna };
+  // 兵隊の装備：スポンジ銃（右手）と丸い盾（左手）。どちらを見せるかは防衛方式で切り替える
+  // 復旧係：マジックハンド（長い棒の先にはさみ）。いつも右手に持っている
+  let reacher = null;
+  if (role === 'restorer') {
+    reacher = new THREE.Group();
+    const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 1.0, 8), new THREE.MeshStandardMaterial({ color: '#adb5bd', metalness: 0.6, roughness: 0.3 }));
+    stick.position.y = -0.5; reacher.add(stick);
+    for (const sx of [-1, 1]) { const c = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.14, 0.08), new THREE.MeshStandardMaterial({ color: '#e03131' })); c.position.set(sx * 0.05, -1.03, 0); c.rotation.z = sx * 0.3; reacher.add(c); }
+    reacher.position.set(0, -0.22, 0.04);
+    armR.add(reacher);
+  }
+  let gun = null, shield = null;
+  if (role === 'soldier') {
+    gun = new THREE.Group();
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.36, 10), new THREE.MeshStandardMaterial({ color: '#ff922b', roughness: 0.5 }));
+    barrel.rotation.x = Math.PI / 2; barrel.position.set(0, -0.26, 0.15); gun.add(barrel);
+    const grip = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.12, 0.08), new THREE.MeshStandardMaterial({ color: '#1c7ed6' })); grip.position.set(0, -0.3, 0.02); gun.add(grip);
+    armR.add(gun);
+    shield = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.05, 18), new THREE.MeshStandardMaterial({ color: '#1c7ed6', roughness: 0.4, metalness: 0.2 }));
+    shield.rotation.x = Math.PI / 2; shield.position.set(-0.05, -0.2, 0.12); armL.add(shield);
+  }
+  return { root, pivot, body, head, armL, armR, legL, legR, carry, stack, held, boots, gold, pack, antenna, gun, shield, reacher };
 }
 
 export const looseMats = carryMats;

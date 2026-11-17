@@ -45,8 +45,8 @@ export class Progress {
     }
     return out;
   }
-  readyEvolutions() {
-    return Object.entries(EVOLUTIONS).filter(([id, e]) => !this.evolutions[id] && Object.entries(e.requires).every(([k, v]) => this.lv(k) >= v)).map(([id]) => id);
+  readyEvolutions(stage) {
+    return Object.entries(EVOLUTIONS).filter(([id, e]) => !this.evolutions[id] && (!e.stages || e.stages.includes(stage)) && Object.entries(e.requires).every(([k, v]) => this.lv(k) >= v)).map(([id]) => id);
   }
 
   /** 選択肢を作る。rand: 0..1 の乱数関数 */
@@ -62,7 +62,7 @@ export class Progress {
     // 確実に出す選択肢（防衛チュートリアルのストッパーズなど）
     for (const id of ticket.force || []) if (PARTS[id] && this.lv(id) < PARTS[id].max && !picks.some((p) => p.id === id)) picks.push({ id, guaranteed: true });
     // 合体設計図（進化）は条件を満たしたら優先して出す
-    if (!ticket.category) for (const ev of this.readyEvolutions()) if (picks.length < 1) picks.push({ evo: ev });
+    if (!ticket.category) for (const ev of this.readyEvolutions(stage)) if (picks.length < 1) picks.push({ evo: ev });
     // 序盤の保証
     if (!ticket.category && !first) for (const gu of GACHA.guarantees) {
       if (this.level >= gu.level && gu.when(this.parts) && PARTS[gu.id].stages.includes(stage) && !picks.some((p) => p.id === gu.id)) { picks.push({ id: gu.id, guaranteed: true }); break; }
@@ -72,6 +72,7 @@ export class Progress {
       const p = PARTS[id];
       let w = RARITY[p.rarity].weight;
       if (stage === 2 && p.category === 'defense') w *= GACHA.stage2DefenseBias;
+      if (stage === 1 && p.category === 'defense' && this.level >= GACHA.stage1DefenseFrom) w *= GACHA.stage1DefenseBias;
       if (this.lastOffered.has(id)) w *= GACHA.repeatPenalty;
       if (p.consumable) w *= 0.6;
       return w;

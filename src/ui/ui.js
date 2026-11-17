@@ -88,7 +88,7 @@ export class UI {
     const marks = (g.checkpoints || []).map((c) => `<div class="mk ${c.done ? 'done' : ''}" style="left:${(c.slotIndex / total) * 100}%" title="${c.def.name}">${c.index + 1}</div>`).join('') + `<div class="mk goal" style="left:100%">🏁</div>`;
     if (marks !== this._marks) { $('pl-marks').innerHTML = marks; this._marks = marks; }
     const crew = g.workers.list.length;
-    $('pl-text').innerHTML = `建設 <b>${fmt(frontIdx)}</b> / ${fmt(total)} 個 ・ 在庫 ${fmt(g.stock + g.crate.count)} ・ 人員 ${crew}人${g.level('machine') ? ' ＋ 自動設置機' : ''} ・ 最長連鎖 ${fmt(g.records[g.stageId].best)}`;
+    $('pl-text').innerHTML = `建設 <b>${fmt(frontIdx)}</b> / ${fmt(total)} 個 ・ 在庫 ${fmt(g.stock + g.crate.count)} ・ 人員 ${crew}人${g.machineActive() && g.level('machine') ? ' ＋ 自動設置機' : ''} ・ 最長連鎖 ${fmt(g.records[g.stageId].best)}`;
     // 小さな警告（確認ダイアログの代わり）
     const w = [];
     if (g.hint && g.time < g.hint.until) w.push(`<span class="hint">${g.hint.text}</span>`);
@@ -187,7 +187,7 @@ export class UI {
       const counts = {};
       for (const w of g.workers.list) { const c = (counts[w.role] ||= { n: 0, busy: 0 }); c.n++; if (w.state === 'walk' || (w.state === 'act' && w.pose !== 'idle' && w.pose !== 'shrug')) c.busy++; }
       html += '<table>' + Object.keys(ROLE_LABEL).filter((r) => counts[r]).map((r) => `<tr><td>${ROLE_LABEL[r]}</td><td>${counts[r].busy} / ${counts[r].n}人 作業中</td></tr>`).join('');
-      if (g.level('machine')) html += `<tr><td>🚜 自動設置機</td><td>${g.machine.hopper ? `稼働中（ホッパー${g.machine.hopper}）` : '補給待ち'}</td></tr>`;
+      if (g.machineActive() && g.level('machine')) html += `<tr><td>🚜 自動設置機</td><td>${g.machine.hopper ? `稼働中（ホッパー${g.machine.hopper}）` : '補給待ち'}</td></tr>`;
       if (g.level('train')) html += `<tr><td>🚂 運搬列車</td><td>${g.train.load ? '運搬中' : '積み込み'}</td></tr>`;
       html += `<tr><td>🦺 ストッパー</td><td>${g.stoppers.length}個${g.stoppers.some((s) => s.gate) ? '（ゲート）' : ''}</td></tr><tr><td>🧱 在庫</td><td>${fmt(g.stock)}（前線 ${g.crate.count}）</td></tr></table>`;
       if (!g.workers.list.length) html += '<p>まだ誰もいません。最初のガチャで建設担当が加わります。</p>';
