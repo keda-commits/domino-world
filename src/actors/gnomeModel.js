@@ -162,6 +162,24 @@ export function buildGnome(role) {
   tip.position.y = 0.16; antenna.add(tip);
   antenna.position.set(0.14, 0.32, -0.05); antenna.visible = false; head.add(antenna);
   // 兵隊の装備：スポンジ銃（右手）と丸い盾（左手）。どちらを見せるかは防衛方式で切り替える
+  // 運搬カゴ（背中）：編みかごの中に小さなドミノが見える
+  let basket = null; const basketFill = [];
+  if (role === 'builder' || role === 'carrier' || role === 'collector') {
+    basket = new THREE.Group(); basket.position.set(0, 0.62, -0.26);
+    const wick = new THREE.MeshStandardMaterial({ color: '#c48a3a', roughness: 0.9 });
+    basket.add(new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.04, 0.24), wick).translateY(-0.17));
+    for (const [x, z, w, d] of [[-0.17, 0, 0.03, 0.24], [0.17, 0, 0.03, 0.24], [0, -0.11, 0.36, 0.03], [0, 0.11, 0.36, 0.03]]) basket.add(new THREE.Mesh(new THREE.BoxGeometry(w, 0.3, d), wick).translateX(x).translateZ(z));
+    for (let i = 0; i < 8; i++) { const dm = new THREE.Mesh(carryGeo, carryMats[i % carryMats.length]); dm.scale.setScalar(0.55); dm.position.set(-0.11 + (i % 4) * 0.075, -0.06 + Math.floor(i / 4) * 0.12, 0); dm.rotation.x = Math.PI / 2; dm.visible = false; basket.add(dm); basketFill.push(dm); }
+    basket.visible = false; pivot.add(basket);
+  }
+  // 水平器（建設担当）：黄色い板に緑の気泡
+  let levelTool = null;
+  if (role === 'builder') {
+    levelTool = new THREE.Group();
+    levelTool.add(new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.42, 0.07), new THREE.MeshStandardMaterial({ color: '#ffd43b' })));
+    const bub = new THREE.Mesh(new THREE.SphereGeometry(0.03, 8, 6), new THREE.MeshStandardMaterial({ color: '#69db7c', emissive: '#2b8a3e', emissiveIntensity: 0.6 })); bub.position.set(0.03, 0, 0); levelTool.add(bub);
+    levelTool.position.set(0, -0.3, 0.06); levelTool.visible = false; armL.add(levelTool);
+  }
   // 復旧係：マジックハンド（長い棒の先にはさみ）。いつも右手に持っている
   let reacher = null;
   if (role === 'restorer') {
@@ -182,7 +200,7 @@ export function buildGnome(role) {
     shield = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.05, 18), new THREE.MeshStandardMaterial({ color: '#1c7ed6', roughness: 0.4, metalness: 0.2 }));
     shield.rotation.x = Math.PI / 2; shield.position.set(-0.05, -0.2, 0.12); armL.add(shield);
   }
-  return { root, pivot, body, head, armL, armR, legL, legR, carry, stack, held, boots, gold, pack, antenna, gun, shield, reacher };
+  return { root, pivot, body, head, armL, armR, legL, legR, carry, stack, held, boots, gold, pack, antenna, gun, shield, reacher, basket, basketFill, levelTool };
 }
 
 export const looseMats = carryMats;

@@ -448,7 +448,7 @@ export class GachaShow {
     this.deliverTime = 1.0;
     if (spawned.length) {
       // 新しい人：箱から飛び出して現場へ走っていく
-      for (const w of spawned) { w.pos.copy(where).add(new THREE.Vector3((Math.random() - 0.5) * 0.6, 0, 0.8)); w.act(0.9, 'cheer', () => (w === g.firstPickWorker ? w.think() : w.goHome())); }
+      for (const w of spawned) { w.pos.copy(where).add(new THREE.Vector3((Math.random() - 0.5) * 0.6, 0, 0.8)); w.act(0.9, 'cheer', () => w.think()); }
       this.deliverTime = 1.3;
     } else if (g.lastSpawnTarget) {
       // 設備：現場の場所をカメラで見せる

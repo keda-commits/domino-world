@@ -62,7 +62,7 @@ export class Game {
     this.physics.onStep((dt) => this.hand && this.hand.step(dt));
     if (this.hand) { this.hand.held = null; this.hand.flying.clear(); }
     this.stage = createStage(id, this.scene, this.physics);
-    this.stage.extraBlockers = [(x, z, m, forRoomba) => this.pieceBlocks(x, z, m, forRoomba)];
+    this.stage.extraBlockers = [(x, z, m, forRoomba, ignoreMovable) => this.pieceBlocks(x, z, m, forRoomba) || (!ignoreMovable && this.factoryBlocks(x, z, m))];
     this.dominoes = new Dominoes(this.scene, this.physics);
     this.dominoes.onTopple = (d) => this.onTopple(d);
     this.course = new Course(this.stage);
@@ -80,7 +80,8 @@ export class Game {
     for (const [k, c] of Object.entries(camps)) if (k !== 'storage') { const m = campMarker(k); m.position.set(c.x, 0, c.z); this.scene.add(m); this.campMeshes.push(m); }
     this.shelf = camps.storage ? new StorageShelf(this.scene, camps.storage) : null;
     if (camps.storage) this.stage.obstacles.push({ x: camps.storage.x, z: camps.storage.z, hw: 3.8, hd: 1.2, yaw: 0, roomba: true, build: true });
-    const fp = camps.machines ? new THREE.Vector3(camps.machines.x, 0, camps.machines.z) : this.depots[0].pos.clone().add(new THREE.Vector3(6, 0, 3));
+    const fs = this.def.factorySpot;
+    const fp = fs ? new THREE.Vector3(fs.x, 0, fs.z) : camps.machines ? new THREE.Vector3(camps.machines.x, 0, camps.machines.z) : this.depots[0].pos.clone().add(new THREE.Vector3(6, 0, 3));
     this.factory = new Factory(this, fp);
     this.workers = new Workers(this);
     this.stoppers = [];
@@ -173,7 +174,7 @@ export class Game {
       onGrab: () => { this.crate.carried = true; this.crate.pinned = true; }, onDrop: () => { this.crate.carried = false; this.settleCrate(); this.navDirty = true; } }));
     G.add(carryEntry(this, { name: 'ドミノ自動設置機', kind: 'facility', obj: this.machine.group, radius: 1.6, height: 2.6, canGrab: () => notRun() && this.machineActive() && this.level('machine') > 0,
       getPos: () => this.machine.pos.clone(), setPos: (v) => this.machine.pos.copy(v), onGrab: () => { this.machine.carried = true; }, onDrop: () => { this.machine.carried = false; } }));
-    G.add(carryEntry(this, { name: '資材運搬トレイン', kind: 'facility', obj: this.train.mesh, radius: 1.6, height: 1.6, canGrab: () => notRun() && this.level('train') > 0,
+    this.trainEntry = G.add(carryEntry(this, { name: '資材運搬トレイン', kind: 'facility', obj: this.train.mesh, radius: 1.6, height: 1.6, canGrab: () => notRun() && this.level('train') > 0,
       getPos: () => this.train.pos.clone(), setPos: (v) => this.train.pos.copy(v), onGrab: () => { this.train.carried = true; }, onDrop: () => { this.train.carried = false; } }));
     this.factoryEntry = G.add(carryEntry(this, { name: 'ドミノ製造機', kind: 'facility', obj: this.factory.group, radius: 2.6, height: 3.6, canGrab: notRun,
       getPos: () => this.factory.group.position.clone(), setPos: (v) => this.factory.group.position.copy(v), onDrop: () => { this.settleOut(this.factory.group.position, 2.6); this.navDirty = true; } }));
@@ -268,7 +269,7 @@ export class Game {
     const props = moved.layout === MAP_LAYOUT ? moved.props || [] : [];
     props.forEach((v, i) => { const e = this.propEntries[i]; if (!e || !v || !this.stage.inBounds(v[0], v[1], 0.5)) return; const o = e.getPos(); if (Math.abs(o.x - v[0]) > 0.05 || Math.abs(o.z - v[1]) > 0.05 || Math.abs((e.obj.rotation.y || 0) - (v[2] || 0)) > 0.01) e.restore(v); });
     if (moved.crate) { this.crate.count = moved.crate.n; if (moved.crate.pinned && this.stage.inBounds(moved.crate.x, moved.crate.z, 1)) { this.crate.pos.set(moved.crate.x, 0, moved.crate.z); this.crate.pinned = true; this.settleCrate(); } }
-    if (moved.factory && this.stage.inBounds(moved.factory[0], moved.factory[1], 2)) { this.factory.group.position.set(moved.factory[0], 0, moved.factory[1]); this.settleOut(this.factory.group.position, 2.6); }
+    if (moved.factory && moved.layout === MAP_LAYOUT && this.stage.inBounds(moved.factory[0], moved.factory[1], 2)) { this.factory.group.position.set(moved.factory[0], 0, moved.factory[1]); this.settleOut(this.factory.group.position, 2.6); }
   }
 
   // ================= 小さな脅威と防衛チュートリアル =================
@@ -417,11 +418,14 @@ export class Game {
     const res = this.progress.take(p);
     if (p.id === 'rewind') this.rewinds += 2;
     this.syncPartsToWorld(true);
+    this.navDirty = true;
     this.lastSpawned = this.workers.list.filter((w) => !before.has(w));
     if (p.id === 'soldier' && this.level('soldier') === 1) this.setHint('💂 おもちゃの兵隊：つかんで置いた所が持ち場。敵（ロボット・ネズミ）が来る所の近くに置こう', 14);
     if (p.id === 'barricade' && this.stageId === 1 && this.level('barricade') === 1) this.setHint('🚧 バリケード：「配置」から置ける。暴走ミニカーの矢印の先に置くと跳ね返す', 14);
     // 最初のガチャで回収担当：そのまま倒れたドミノを拾いに行く様子をカメラで追う
     this.firstPickWorker = wasFirst && p.id === 'collector' ? this.lastSpawned[0] || null : null;
+    // 獲得した直後に「効いている様子」を見せる：カメラで追いかける相手と、ひと言
+    this.showcase = this.makeShowcase(p);
     const id = p.evo || p.id;
     const firstOf = (role) => { const w = this.workers.list.find((x) => x.role === role); return w ? w.pos.clone() : null; };
     const T = {
@@ -437,6 +441,28 @@ export class Game {
   }
 
   get defenseStyle() { return DEFENSE.style; }
+  /** ガチャ直後の見せ場：新しい人は本人、道具は使う人、設備は設備そのものをカメラで追う */
+  makeShowcase(p) {
+    const id = p.evo || p.id;
+    const SAYS = {
+      builder: '設計図どおりに並べます！', carrier: '倉庫から最前線へ運びます！', collector: '倒れたドミノ、拾ってきます！', restorer: 'マジックハンドで復旧！',
+      stopperCrew: 'ストッパーを差し込みます！', guard: '警備につきます！', soldier: '持ち場へ！ 敵はスポンジ弾で追い払います',
+    };
+    const newW = (this.lastSpawned || [])[0];
+    if (newW && newW.grabEntry) return { entry: newW.grabEntry, text: SAYS[newW.role] || 'がんばります！', obj: newW.root };
+    const byRole = (...roles) => { for (const r of roles) { const w = this.workers.list.find((x) => x.role === r); if (w && w.grabEntry) return w; } return null; };
+    const TOOL = {
+      boots: [['builder', 'carrier', 'collector'], '赤いブーツで足が速くなった！'],
+      basket: [['carrier', 'builder', 'collector'], '背中のかごで一度にたくさん運べる！'],
+      level: [['builder'], '水平器を当てて、まっすぐ置くよ（うっかり倒し減）'],
+      massBuild: [['builder'], '金ヘルメットの大量建設隊！ 2個ずつ並べる'],
+      autoSafety: [['stopperCrew', 'soldier'], 'アンテナで連動！ 危ない所を先回りで隔離'],
+    };
+    if (TOOL[id]) { const w = byRole(...TOOL[id][0]); if (w) return { entry: w.grabEntry, text: TOOL[id][1], obj: w.root }; }
+    if (id === 'factory' && this.factoryEntry) return { entry: this.factoryEntry, text: '🏭 工場が動き出した！ 歯車が回ってベルトから箱へ', obj: this.factory.group };
+    if (id === 'train' && this.trainEntry) return { entry: this.trainEntry, text: '🚂 列車が倉庫と最前線を往復！', obj: this.train.mesh };
+    return null;
+  }
   /** 兵隊の持ち場（コースのまわりに分散） */
   soldierPost(i) {
     const posts = this.def.soldierPosts || this.def.guardPosts;
@@ -937,6 +963,13 @@ export class Game {
   }
 
   // ---------- 置くタイプの設備 ----------
+  /** ドミノ製造機（本体・ベルト・ドミノ箱）の場所。人や列車は通り抜けない */
+  factoryBlocks(x, z, m) {
+    const f = this.factory;
+    if (!f || !this.progress || this.level('factory') <= 0 || f.carried) return false;
+    const p = f.group.position;
+    return Math.abs(x - (p.x + 2.45)) < 4.95 + m && Math.abs(z - p.z) < 2.1 + m;
+  }
   pieceBlocks(x, z, m, forRoomba) {
     const inRect = (o, mm) => {
       const c = Math.cos(-o.yaw), s = Math.sin(-o.yaw), dx = x - o.x, dz = z - o.z;
@@ -1773,7 +1806,7 @@ export class Game {
   totalDominoes() {
     let inCourse = 0;
     for (const d of this.dominoes.list) inCourse++;
-    return this.stock + this.crate.count + this.machine.hopper + this.workers.inHands() + inCourse + (this.roomba ? this.roomba.bin : 0) + this.train.load;
+    return this.stock + this.crate.count + this.machine.hopper + this.workers.inHands() + inCourse + (this.roomba ? this.roomba.bin : 0) + this.train.load + (this.factory ? this.factory.box : 0);
   }
 
   // ================= セーブ =================
@@ -1802,7 +1835,7 @@ export class Game {
       gachaUsed: this.gachaMachine.used,
       finalChest: this.finalChest.opened,
       // 在庫（資材箱の中身は grab.crate に別に保存。二重計上しない）
-      stock: this.stock + this.machine.hopper + this.workers.inHands() + this.train.load + (this.roomba ? this.roomba.bin : 0),
+      stock: this.stock + this.machine.hopper + this.workers.inHands() + this.train.load + (this.roomba ? this.roomba.bin : 0) + (this.factory ? this.factory.box : 0),
       grab: this.serializeGrab(),
       pieceSeq: this.pieceSeq || 0,
     };

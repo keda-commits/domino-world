@@ -40,6 +40,9 @@ export class Gnome {
     this.walking = false;
     this.side = id % 2 ? 0.75 : -0.75;
     this.home = spawn.clone();
+    // 性格（Ver.0.5）：なまけ・体育会系・遊び好き。手が空いたときの過ごし方とサボりやすさが変わる
+    this.trait = { lazy: Math.random(), sporty: Math.random(), playful: Math.random() };
+    this.slackCool = 10 + Math.random() * 20; this.slacks = 0;
     game.scene.add(this.root);
     this.applyLooks();
   }
@@ -55,6 +58,9 @@ export class Gnome {
     m.gold.visible = mass;
     m.pack.visible = mass;
     m.antenna.visible = this.isStopper && (g.evolved('autoSafety') || g.evolved('stopperHQ'));
+    // 運搬カゴ：背中のかご（中のドミノが見える）。ブーツは赤いブーツ。水平器は建設担当が置くときに当てる
+    if (m.basket) m.basket.visible = g.level('basket') > 0 && ['builder', 'carrier', 'collector'].includes(this.role) && !mass;
+    this.levelOn = g.level('level') > 0 && this.role === 'builder';
   }
 
   // ---------- 基本動作 ----------
@@ -64,10 +70,80 @@ export class Gnome {
     // 手が空いたら（長めの待ち）自分の待機所へ戻る。ガチャの前などに人が溜まらないように
     const home = time >= 1 && (pose === 'idle' || pose === 'shrug') && this.game.mode === 'build' && this.role !== 'guard' && this.role !== 'soldier' ? this.game.campPos(this.role) : null;
     if (home && Math.hypot(home.x - this.pos.x, home.z - this.pos.z) > 4) {
-      const off = new THREE.Vector3(Math.cos(this.id * 2.4) * 2, 0, Math.sin(this.id * 2.4) * 2).add(home);
-      return this.goto(() => off, () => this.act(time, pose, () => this.think()));
+      const off = new THREE.Vector3(Math.cos(this.id * 2.4) * 2.6, 0, Math.sin(this.id * 2.4) * 2.6).add(home);
+      return this.goto(() => off, () => this.idleFun(time) || this.act(time, pose, () => this.think()));
     }
+    if (home && this.idleFun(time)) return;
     this.act(time, pose, () => this.think());
+  }
+
+  // ---------- 手が空いたとき・サボり（Ver.0.5） ----------
+  /** 役割と性格で、手が空いたときの遊びを選ぶ */
+  pickFun(slack) {
+    const t = this.trait;
+    const W = {
+      pushup: 0.4 + t.sporty, dumbbell: 0.3 + t.sporty, sit: 0.3 + t.lazy, nap: t.lazy * (slack ? 0.4 : 1), kick: 0.2 + t.playful,
+      pretend: 0.2 + t.playful * 0.8, chase: t.playful * 0.9, squabble: t.playful * 0.4, fakework: slack ? 0.6 + t.lazy : 0.1, drill: 0.05,
+    };
+    const ROLE = {
+      builder: { pushup: 1.4, fakework: 1.5 }, carrier: { dumbbell: 1.8, sit: 1.2 }, collector: { kick: 1.6, pretend: 1.5, nap: 1.3 },
+      restorer: { drill: 6, pushup: 1.3 }, stopperCrew: { drill: 5, sit: 1.2 }, guard: { drill: 6 }, soldier: { drill: 8, pushup: 1.5 },
+    }[this.role] || {};
+    let sum = 0; const list = [];
+    for (const [k, v] of Object.entries(W)) { const w = v * (ROLE[k] || 1); if (slack && (k === 'chase' || k === 'squabble')) continue; sum += w; list.push([k, w]); }
+    let r = Math.random() * sum;
+    for (const [k, w] of list) { r -= w; if (r <= 0) return k; }
+    return 'sit';
+  }
+  /** 遊ぶ／休む。time 秒くらい。相手がいる遊びは近くの手の空いた仲間と */
+  idleFun(time, slack = false) {
+    const g = this.game;
+    if (g.mode !== 'build' || this.role === 'soldier' && !slack && Math.random() < 0.5) return false;
+    const kind = this.pickFun(slack);
+    const dur = Math.max(2, time) + Math.random() * 2.5;
+    const LINES = {
+      pushup: ['いち、に！', 'ふんっ！ 腕立て〜'], dumbbell: ['ムキッ', 'もう1回！'], sit: ['ふぅ〜', 'ひと休み'], nap: ['Zzz…', 'すやぁ…'],
+      kick: ['ポーン！', 'ナイスキック！'], pretend: ['ドミノ倒し、どーん！ごっこ', '巨大ドミノだぞ〜！'], fakework: ['…はたらいてる、はたらいてる', '（作業してるふり…）'],
+      drill: ['気をつけ！', '敬礼！ 点検よし！'], chase: ['まて〜！', 'つかまえた！'], squabble: ['ぷんぷん！', 'そっちこそ！'],
+    };
+    const line = (k) => { const a = LINES[k]; if (Math.random() < 0.6) this.say(a[Math.floor(Math.random() * a.length)]); };
+    this.funKind = kind;
+    if (kind === 'chase' || kind === 'squabble') {
+      const mate = g.workers.list.find((o) => o !== this && o.state === 'act' && o.funKind && o.funKind !== 'chase' && o.funKind !== 'squabble' && !o.slacking && Math.hypot(o.pos.x - this.pos.x, o.pos.z - this.pos.z) < 9);
+      if (!mate) return this.idleFun(time, slack) && true;
+      line(kind);
+      if (kind === 'squabble') {
+        for (const w of [this, mate]) { w.funKind = 'squabble'; w.face2(w === this ? mate.pos : this.pos); w.act(2.4, 'squabble', () => { w.funKind = null; w.think(); }); }
+        setTimeout(() => mate.say('そっちこそ！'), 600);
+        return true;
+      }
+      // 追いかけっこ：自分が逃げ、相手が追う（待機所のまわり）
+      const c = this.pos.clone();
+      const runTo = new THREE.Vector3(c.x + (Math.random() - 0.5) * 7, 0, c.z + (Math.random() - 0.5) * 7);
+      g.clampToStage(runTo);
+      mate.funKind = 'chase';
+      this.goto(() => runTo, () => { this.funKind = null; this.act(0.8, 'cheer', () => this.think()); }, 1.4);
+      mate.goto(() => this.pos, () => { mate.funKind = null; mate.say('タッチ！'); mate.act(0.8, 'cheer', () => mate.think()); }, 1.35);
+      mate.arriveDist = 0.7;
+      return true;
+    }
+    line(kind);
+    const pose = { pushup: 'pushup', dumbbell: 'dumbbell', sit: 'sit', nap: 'nap', kick: 'kick', pretend: 'cheer', fakework: 'pick', drill: 'salute' }[kind];
+    this.act(dur, pose, () => { this.funKind = null; this.slacking = false; this.think(); });
+    return true;
+  }
+  /** 仕事中のサボり：役割のレベルが低いほど、なまけ者ほどサボる。短く、続けてはサボらない（止まらない） */
+  maybeSlack() {
+    const g = this.game;
+    if (g.mode !== 'build' || this.load > 0 || g.time < this.slackCool) return false;
+    const lv = Math.max(1, g.level(this.role));
+    const chance = (0.03 + 0.12 * this.trait.lazy) / lv;
+    this.slackCool = g.time + 6;
+    if (Math.random() > chance) return false;
+    this.slackCool = g.time + 25 + Math.random() * 15;
+    this.slacks++; g.stats.slacks = (g.stats.slacks || 0) + 1;
+    this.slacking = true;
+    return this.idleFun(1.5 + Math.random() * 1.5, true);
   }
   /** 待機所へ向かう（ガチャで加わった直後など） */
   goHome() {
@@ -88,6 +164,9 @@ export class Gnome {
     this.m.held.visible = false;
     this.pose = 'idle';
     const g = this.game;
+    this.funKind = null; this.slacking = false;
+    if (this.m.ball) this.m.ball.visible = false;
+    if (this.role !== 'soldier' && this.role !== 'guard' && !this.standby && this.maybeSlack()) return;
     if (g.mode === 'run' && this.role === 'restorer') {
       const rd = g.findRestandJob(this, Infinity, true);
       if (rd) return this.doRestand(rd);
@@ -214,6 +293,18 @@ export class Gnome {
   thinkCarrier() {
     const g = this.game;
     if (this.load === 0) {
+      // 工場のドミノ箱にたまっていたら取りに行く（工場で作ったドミノが運ばれて使われるまでが見える）
+      const fac = g.factory;
+      if (fac && g.level('factory') > 0 && fac.box >= Math.min(6, this.capacity) && !g.workers.list.some((o) => o !== this && o.job === fac)) {
+        this.job = fac;
+        return this.goto(() => fac.boxPos(tmp), () => {
+          const take = fac.take(this.capacity);
+          this.job = null;
+          if (take <= 0) return this.wait(0.3);
+          this.load += take;
+          this.act(CFG.pickTime / this.speed, 'pick', () => this.think());
+        });
+      }
       if (g.stock <= 0 || g.crate.count >= g.crate.cap || g.unbuiltCount() === 0) return this.wait(1.0, g.stock <= 0 ? 'shrug' : 'idle');
       const dep = g.nearestDepot(g.crate.pos);
       return this.goto(() => dep.spot(this.id, tmp), () => {
@@ -226,7 +317,11 @@ export class Gnome {
     this.goto(() => g.crate.spot(this.id + 5, tmp), () => {
       const put = Math.min(this.load, g.crate.cap - g.crate.count);
       g.crate.count += put; this.load -= put;
-      if (this.load > 0 && g.unbuiltCount() === 0) { g.returnToStock(this.load); this.load = 0; }
+      if (this.load > 0 && (g.unbuiltCount() === 0 || put === 0)) {
+        // 資材箱がいっぱい：残りは倉庫へ持って帰る
+        const dep = g.nearestDepot(this.pos);
+        return this.goto(() => dep.spot(this.id, tmp), () => { g.returnToStock(this.load); this.load = 0; this.think(); });
+      }
       g.audio.drop();
       this.act(CFG.pickTime / this.speed, 'pick', () => this.think());
     });
@@ -576,6 +671,12 @@ export class Gnome {
       case 'pick': { const k = Math.sin(Math.min(1, this.poseT * 2.5) * Math.PI); lean = 0.8 * k; armL = armR = -0.6 * k - 0.2; break; }
       case 'kneel': { const k = Math.min(1, this.poseT * 4); lean = 0.6 * k; bob = -0.12 * k; legA = 0.9 * k; armL = armR = -1.0; break; }
       case 'salute': armR = -2.5; armRz = 0.9; armL = 0.05; bob = 0.02; break;
+      case 'pushup': { const k = Math.abs(Math.sin(this.poseT * 4)); lean = 1.35; bob = -0.38 + k * 0.12; armL = armR = -1.4 - k * 0.2; break; }
+      case 'dumbbell': { armL = -0.3 - Math.max(0, Math.sin(this.poseT * 5)) * 1.9; armR = -0.3 - Math.max(0, -Math.sin(this.poseT * 5)) * 1.9; bob = 0.01; break; }
+      case 'sit': legA = -1.45; bob = -0.3; armL = armR = -0.3; lean = -0.1; break;
+      case 'nap': lean = -1.45; bob = -0.5; armL = armR = -2.9; legA = 0.05; break;
+      case 'kick': { const k = Math.sin(this.poseT * 4); legA = Math.max(0, k) * 1.1; armL = -0.5 * k; armR = 0.5 * k; break; }
+      case 'squabble': armL = -2.0 + Math.sin(this.poseT * 16) * 0.6; armR = -2.0 - Math.sin(this.poseT * 16) * 0.6; bob = Math.abs(Math.sin(this.poseT * 12)) * 0.12; lean = 0.15; break;
       case 'reach': { const k = Math.sin(Math.min(1, this.poseT * 2.2) * Math.PI); armR = -1.35 - 0.2 * k; armL = -0.4; lean = 0.25 * k; if (m.reacher) m.reacher.scale.y = 1 + 0.6 * k; break; }
       case 'aim': armR = -1.55; armL = -1.2; spread = -0.1; lean = -0.05; bob = this.poseT < 0.08 ? 0.03 : 0; break;
       case 'shove': { const k = Math.min(1, this.poseT * 6); armL = -1.5 * k; armR = -1.2 * k; lean = 0.35 * k; legA = 0.4 * k; break; }
@@ -601,6 +702,23 @@ export class Gnome {
     m.pivot.rotation.x = lean;
     m.pivot.position.y = bob;
     this.root.rotation.y = this.yaw;
+    if (this.pose === 'dumbbell' && !m.bells) {
+      m.bells = [m.armL, m.armR].map((a) => { const b = new THREE.Group(); const mat = new THREE.MeshStandardMaterial({ color: '#495057', metalness: 0.5 }); b.add(new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.2, 6).rotateZ(Math.PI / 2), mat)); for (const sx of [-0.1, 0.1]) b.add(new THREE.Mesh(new THREE.SphereGeometry(0.05, 8, 6), mat).translateX(sx)); b.position.set(0, -0.28, 0); a.add(b); return b; });
+    }
+    if (m.bells) m.bells.forEach((b) => (b.visible = this.pose === 'dumbbell'));
+    if (this.pose === 'kick') {
+      if (!m.ball) { m.ball = new THREE.Mesh(new THREE.SphereGeometry(0.16, 12, 8), new THREE.MeshStandardMaterial({ color: ['#ff6b6b', '#4dabf7', '#ffd43b'][this.id % 3] })); m.ball.castShadow = true; this.game.scene.add(m.ball); }
+      const k = (this.poseT * 4) % (Math.PI * 2), out = Math.max(0, Math.sin(k)) * 1.6;
+      m.ball.visible = true;
+      m.ball.position.set(this.pos.x + Math.sin(this.yaw) * (0.45 + out), 0.16 + Math.abs(Math.sin(k)) * 0.5, this.pos.z + Math.cos(this.yaw) * (0.45 + out));
+    } else if (m.ball) m.ball.visible = false;
+    if (this.pose === 'nap' && Math.floor(this.poseT / 1.6) !== this._zz) { this._zz = Math.floor(this.poseT / 1.6); if (this.poseT > 0.5) this.game.fx.floatObj(this.root, 'Zzz', '', 1.2); }
+    if (m.basket) {
+      // 背中のかご：持っている数に合わせて中のドミノが増える
+      const cap = Math.max(1, this.capacity), k = Math.round((Math.min(this.load, cap) / cap) * m.basketFill.length);
+      for (let i = 0; i < m.basketFill.length; i++) m.basketFill[i].visible = i < k;
+    }
+    if (m.levelTool) m.levelTool.visible = this.levelOn && (this.pose === 'place' || this.pose === 'idle');
     if (m.gun) { const push = this.game.defenseStyle === 'push'; m.gun.visible = !push; m.shield.visible = push; }
     const show = this.pose === 'trip' ? 0 : Math.min(this.load, 6);
     for (let i = 0; i < 6; i++) m.stack[i].visible = i < show;
@@ -608,6 +726,7 @@ export class Gnome {
 
   dispose() {
     this.game.scene.remove(this.root);
+    if (this.m.ball) this.game.scene.remove(this.m.ball);
     this.loose.forEach((d) => this.game.scene.remove(d));
   }
 }

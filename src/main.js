@@ -201,7 +201,9 @@ function startGacha(r = null) {
   gacha.start(() => {
     game.gachaActive = false;
     const w = game.firstPickWorker; game.firstPickWorker = null;
+    const sc = game.showcase; game.showcase = null;
     if (w && w.grabEntry) { followEntry(w.grabEntry); fx.floatObj(w.root, '倒れたドミノ、拾ってきます！', 'coin', 2.4); }
+    else if (sc && sc.entry) { followEntry(sc.entry); fx.floatObj(sc.obj, sc.text, 'coin', 2.6); }
     postGacha(r);
   });
 }

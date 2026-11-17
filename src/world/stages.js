@@ -26,7 +26,7 @@ export const STAGES = {
     towerSpot: { x: 14, z: 35.9 }, hqSpot: { x: -8, z: 35.9 },
     gachaSpot: { x: -30, z: -34.9, yaw: 0 },
     // 獲得物の行き先（看板つき）
-    camps: { builders: { x: -12, z: -30 }, logistics: { x: -46, z: -33 }, safety: { x: -8, z: 34 }, machines: { x: 19, z: -31 }, storage: { x: 8, z: -36.8, yaw: 0 } },
+    camps: { builders: { x: -12, z: -30 }, logistics: { x: -40, z: -29 }, safety: { x: -8, z: 34 }, machines: { x: 19, z: -31 }, storage: { x: 8, z: -36.8, yaw: 0 } },
     guardPosts: [[-20, -24], [10, 31], [30, 31]],
     roomba: null,
     // いたずらネズミ（中間ゴール2の到達後に登場。机の下の巣穴から出てくる）
@@ -34,6 +34,7 @@ export const STAGES = {
     // Ver.0.5：レベル5からいたずらロボット、レベル7から暴走ミニカー（それぞれ別の防衛が効く）
     robot: { home: { x: -52, z: 12 }, minLevel: 5, interval: [70, 100], firstDelay: 35 },
     car: { garage: { x: 53, z: -8 }, minLevel: 7, interval: [80, 120], firstDelay: 45, speed: 13 },
+    factorySpot: { x: -54, z: -33.5 }, // 工場：スタート側の倉庫の近く（できたドミノをすぐ運べる）
     soldierPosts: [[-8, -24], [22, 31], [-26, 31], [48, -22], [6, 31]], // 初期の持ち場（敵の出どころから離れている。プレイヤーがつかんで動かす）
     // 中間ゴール：序盤は近く、後半は建設力の成長に合わせて間隔を広げる
     checkpoints: [
@@ -68,6 +69,7 @@ export const STAGES = {
     mouse: { den: { x: 5, z: -51.9 }, afterCheckpoint: 0, interval: [60, 95] },
     ball: { rest: { x: -20, z: 46 }, radius: 1.3, speed: 13, targets: [[-10, -12], [20, 0], [0, -24], [30, -14], [-30, 4]], interval: [75, 115], firstDelay: 55 },
     camps: { builders: { x: -62, z: 6 }, logistics: { x: -64, z: 44 }, safety: { x: -44, z: 48 }, machines: { x: 70, z: 7 }, storage: { x: 52.5, z: -54.2, yaw: 0 } },
+    factorySpot: { x: -80, z: 29 },
     guardPosts: [[-48, 14], [0, 25.5], [52, 10], [20, -36], [-30, -37]],
     roomba: {
       dock: { x: 62, z: -51.4, yaw: 0 },
@@ -195,7 +197,7 @@ class StageRuntime {
       const lx = dx * c + dz * s, lz = -dx * s + dz * c;
       if (Math.abs(lx) < o.hw + m && Math.abs(lz) < o.hd + m) return true;
     }
-    for (const e of this.extraBlockers || []) if (e(x, z, m, forRoomba)) return true;
+    for (const e of this.extraBlockers || []) if (e(x, z, m, forRoomba, ignoreMovable)) return true;
     return false;
   }
   heightAt(x, z) {

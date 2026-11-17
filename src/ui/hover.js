@@ -57,6 +57,14 @@ function describeWorker(game, w) {
   if (w.role === 'restorer' || w.role === 'collector') rows.push(['起こした数', `${w.restored || 0}枚`]);
   if (w.role === 'collector') rows.push(['対応', '散らばったドミノを拾って倉庫へ。近くの倒れたドミノも手で起こす']);
   if (w.role === 'guard') rows.push(['対応', '警報でルンバの進路にバリケード']);
+  if (w.trait) {
+    const t = w.trait, tags = [];
+    if (t.lazy > 0.66) tags.push('のんびり屋'); if (t.sporty > 0.66) tags.push('体育会系'); if (t.playful > 0.66) tags.push('遊び好き');
+    rows.push(['性格', tags.join('・') || 'まじめ']);
+    const FUN = { pushup: '腕立て伏せ中', dumbbell: 'ダンベル中', sit: 'ひと休み中', nap: '昼寝中', kick: 'ボール遊び中', pretend: 'ごっこ遊び中', chase: '追いかけっこ中', squabble: 'けんか中', fakework: '働いているふり…', drill: '点検・敬礼中' };
+    if (w.funKind) rows.push(['いま', (w.slacking ? 'サボり：' : '休けい：') + (FUN[w.funKind] || '休けい')]);
+    if (w.slacks) rows.push(['サボった回数', `${w.slacks}回（レベルが上がると減る）`]);
+  }
   return { title: `${ROLE_ICON[w.role] || '🧑'} ${part ? part.name : w.role}`, rows, note: part ? part.desc : '' };
 }
 
