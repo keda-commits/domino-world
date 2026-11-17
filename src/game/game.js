@@ -14,6 +14,8 @@ import { Checkpoint } from '../world/checkpoints.js';
 import { Mouse, RollingBall } from '../world/threats.js';
 import { MischiefRobot, RunawayCar } from '../world/enemies.js';
 import { Darts } from './defense.js';
+import { ToyRailway } from '../world/toyrail.js';
+import { Crossings } from './crossings.js';
 import { Grabbables, propEntry, carryEntry, addHitProxy } from './grabbables.js';
 import { NavGrid } from './nav.js';
 import { campMarker, StorageShelf, ROLE_CAMP, SMALL_PARTS } from '../world/camps.js';
@@ -139,7 +141,10 @@ export class Game {
     this.history = this.history || [];
     // CPU が設計した固定コース
     this.buildDesignedCourse();
+    // Ver.0.6：ステージ2の青い線路（おもちゃの鉄道）。中間ゴールの装置より先に作る（線路の上に置かないため）
+    this.railway = this.def.toyRail ? new ToyRailway(this, this.def.toyRail) : null;
     this.setupCheckpoints();
+    this.crossings = this.railway ? new Crossings(this, this.railway) : null;
     if (data) this.applyStageSave(data);
     this.syncPartsToWorld(true);
     this.refreshCourse();
@@ -352,6 +357,8 @@ export class Game {
 
   unloadStage() {
     if (!this.stageId) return;
+    if (this.crossings) { this.crossings.dispose(); this.crossings = null; }
+    if (this.railway) { this.railway.dispose(); this.railway = null; }
     for (const m of this.campMeshes || []) this.scene.remove(m);
     if (this.shelf) this.shelf.dispose();
     for (const th of this.threats || []) th.dispose();
@@ -409,6 +416,13 @@ export class Game {
     for (const role of ROLE_PARTS) {
       const want = this.level(role);
       while (this.workers.count(role) < want) this.workers.hire(role, quiet);
+    }
+    if (this.railway) {
+      // ステージ2：設計主任（参謀）と撤去班は最初からいる。エリート建築士はガチャで加わる（レベルで得意な建築が増える）
+      while (this.workers.count('chief') < 1) this.workers.hire('chief', quiet);
+      while (this.workers.count('wrecker') < 2) this.workers.hire('wrecker', quiet);
+      while (this.workers.count('architect') < (this.level('architect') > 0 ? 1 : 0)) this.workers.hire('architect', quiet);
+      while (this.workers.count('railcrew') < 2) { const c = this.workers.hire('railcrew', true); c.pos.copy(this.railway.depot).add(new THREE.Vector3(0, 0, this.workers.count('railcrew') * 1.2)); c.home = c.pos.clone(); }
     }
     if (this.level('watchtower') && !this.tower) {
       this.tower = towerMesh();
@@ -576,7 +590,7 @@ export class Game {
         let ok = true;
         for (const off of [0.55, 1.2, 2.3, 3.2]) {
           const px = sl.x + nx * sd * off, pz = sl.z + nz * sd * off;
-          if (this.stage.blocked(px, pz, 0.6) || !this.stage.inBounds(px, pz, 0.8)) ok = false;
+          if (this.stage.blocked(px, pz, 0.6) || !this.stage.inBounds(px, pz, 0.8) || (this.railway && this.railway.track.onTrack(px, pz, 1.4))) ok = false;
           for (const o of this.course.allSlots) if (Math.abs(o.i - sl.i) > 6 && (o.x - px) ** 2 + (o.z - pz) ** 2 < 1.1) ok = false;
         }
         if (ok) { side = sd; break; }
@@ -633,7 +647,9 @@ export class Game {
   unbuiltCount() { return this.unbuiltList().filter((s) => !s.domino).length; }
   loosePlannedNeed() { return 0; }
   frontSlot() { return this.unbuiltList().find((s) => !s.domino) || null; }
-  machineTarget() { return this.unbuiltList().find((s) => !s.domino && (!s.claim || s.claim === -1) && !this.slotBlocker(s)) || null; }
+  machineTarget() { return this.unbuiltList().find((s) => !s.domino && (!s.claim || s.claim === -1) && !this.crossBlocked(s) && !this.slotBlocker(s)) || null; }
+  /** 線路との交差地点で、まだ解決していないマス（設計主任が建築か撤去を決めるまで並べない） */
+  crossBlocked(s) { return !!(this.crossings && this.crossings.blocks(s)); }
   nextUnbuiltNear(slot) {
     const seg = slot.seg; if (!seg || !seg.slots) return null;
     const n = seg.slots[slot.i + 1];
@@ -644,7 +660,7 @@ export class Game {
     const list = this.unbuiltList();
     let best = null, bd = Infinity, k = 0;
     for (const s of list) {
-      if (s.domino || s.claim || this.slotBlocker(s)) continue;
+      if (s.domino || s.claim || this.crossBlocked(s) || this.slotBlocker(s)) continue;
       const d = (s.x - gnome.pos.x) ** 2 + (s.z - gnome.pos.z) ** 2 + k * 4;
       if (d < bd) { bd = d; best = s; }
       if (++k > 14) break;
@@ -731,9 +747,9 @@ export class Game {
     let slot = null;
     if (near) {
       let bd = 3.5 * 3.5;
-      for (const s of this.unbuiltList()) { if (s.domino || s.claim) continue; const d = (s.x - near.x) ** 2 + (s.z - near.z) ** 2; if (d < bd) { bd = d; slot = s; } }
+      for (const s of this.unbuiltList()) { if (s.domino || s.claim || this.crossBlocked(s)) continue; const d = (s.x - near.x) ** 2 + (s.z - near.z) ** 2; if (d < bd) { bd = d; slot = s; } }
     }
-    if (!slot) slot = this.unbuiltList().find((s) => !s.domino && !s.claim);
+    if (!slot) slot = this.unbuiltList().find((s) => !s.domino && !s.claim && !this.crossBlocked(s));
     if (!slot) { this.audio.deny(); this.fx.floatAt(near || tmp.set(0, 1, 0), 'まず「コースを描く」で線を引こう', 'warn', 1.6); return false; }
     if (this.stock > 0) this.stock--; else this.crate.count--;
     this.placeAt(slot, null);
@@ -879,7 +895,7 @@ export class Game {
     let best = null, bd = Infinity;
     for (const s of this.unbuiltList()) {
       if (s.order < 0 || s.order >= fo) continue;
-      if (s.domino || s.claim || this.slotBlocker(s)) continue;
+      if (s.domino || s.claim || this.crossBlocked(s) || this.slotBlocker(s)) continue;
       const d = (s.x - gnome.pos.x) ** 2 + (s.z - gnome.pos.z) ** 2;
       if (d < bd) { bd = d; best = s; }
     }
@@ -1028,8 +1044,8 @@ export class Game {
     const hit = (b) => { const c = Math.cos(-b.yaw), s = Math.sin(-b.yaw), dx = x - b.x, dz = z - b.z; return Math.abs(dx * c + dz * s) < 2.6 + m && Math.abs(-dx * s + dz * c) < 0.5 + m; };
     return this.placed.some((p) => p.type === 'barricade' && hit(p)) || this.tempBarricades.some(hit);
   }
-  canPlacePiece(type, x, z, yaw) {
-    if (this.placeableUsed(type) >= this.placeableCount(type)) return { ok: false, why: `${PIECE_LABEL[type]}がもうありません（ガチャで増やせます）` };
+  canPlacePiece(type, x, z, yaw, ignoreCount = false) {
+    if (!ignoreCount && this.placeableUsed(type) >= this.placeableCount(type)) return { ok: false, why: `${PIECE_LABEL[type]}がもうありません（ガチャで増やせます）` };
     const st = this.stage;
     if (type === 'minicar' || type === 'marble' || type === 'bridge') {
       const len = type === 'bridge' ? 35 : type === 'minicar' ? 11 : 12;
@@ -1046,6 +1062,7 @@ export class Game {
         const ex = x + ax * e * (FOOTBRIDGE_L / 2 - 0.6), ez = z + az * e * (FOOTBRIDGE_L / 2 - 0.6);
         if (!st.inBounds(ex, ez, 0.8) || st.blocked(ex, ez, 0.6)) return { ok: false, why: '階段の所に家具があります' };
         if (this.nearestSlot(ex, ez, 1.0)) return { ok: false, why: '階段がドミノの列にかかっています（列をまたぐ向きに）' };
+        if (this.railway && this.railway.track.onTrack(ex, ez, 0.5)) return { ok: false, why: '階段が線路にかかっています' };
       }
       return { ok: true };
     }
@@ -1054,8 +1071,8 @@ export class Game {
     if (type === 'bell' && !this.nearestSlot(x, z, 2.5)) return { ok: false, why: 'コースのすぐ横に置いてください' };
     return { ok: true };
   }
-  placePiece(type, x, z, yaw, quiet = false) {
-    const chk = this.canPlacePiece(type, x, z, yaw);
+  placePiece(type, x, z, yaw, quiet = false, force = false) {
+    const chk = this.canPlacePiece(type, x, z, yaw, force);
     if (!chk.ok) { if (!quiet) { this.audio.deny(); this.fx.floatAt(tmp.set(x, 1.5, z), chk.why, 'warn', 1.6); } return null; }
     if (type === 'minicar' || type === 'marble' || type === 'bridge') {
       const id = (this.pieceSeq = (this.pieceSeq || 0) + 1);
@@ -1394,6 +1411,7 @@ export class Game {
     const root = this.course.segments.find((s) => s.from.type === 'start');
     const first = root && root.slots[0];
     if (!first || !first.domino || !this.dominoes.isStandingAt(first.domino, first)) { this.audio.deny(); this.fx.floatAt(tmp.set(this.def.start.x, 2, this.def.start.z), '最初のドミノが立っていません', 'warn', 1.8); return false; }
+    if (this.crossings) this.crossings.preRunCheck();
     this.snapshot = this.takeSnapshot();
     this.mode = 'run';
     this.records[this.stageId].attempts++;
@@ -1646,6 +1664,7 @@ export class Game {
       piggy, piggyLost: this.piggy && !cleared ? run.piggy - piggy : 0, roombaHits: run.roombaHits, time: run.t,
     };
     this.lastResult = result;
+    if (this.crossings) this.crossings.afterRun();
     this.history.unshift({ at: Date.now(), stage: this.stageId, count: run.count, cleared, reason, xp: xp.total, record: newBest, checkpoints: result.checkpoints.map((c) => c.index + 1) });
     this.history.length = Math.min(this.history.length, 40);
     this.run = null;
@@ -1781,8 +1800,11 @@ export class Game {
     if (this.roomba) this.roomba.update(dt, this);
     for (const th of this.threats || []) th.update(dt);
     if (this.darts) this.darts.update(dt);
+    if (this.railway) this.railway.update(dt);
+    if (this.crossings) this.crossings.update(dt);
     this.updateTutorial();
     this.updateAccidentReaction();
+    if (this.nav) this.nav.budget = 3; // 経路探索はフレームごとに最大3件
     if (this.nav) { if (this.navDirty) { this.navDirty = false; this.nav.buildStatic(); for (const p of this.placed) if (p.type === 'footbridge') this.nav.addBridge(p.a, p.b); } this.nav.refresh(this.time); }
     this.updateThrows(dt);
     this.updateAlarm(dt);
@@ -1860,6 +1882,7 @@ export class Game {
     const loose = [];
     for (const d of this.dominoes.list) if (!d.slot) { const t = d.body.translation(), r = d.body.rotation(); loose.push([+t.x.toFixed(2), +t.z.toFixed(2), +t.y.toFixed(3), +r.x.toFixed(4), +r.y.toFixed(4), +r.z.toFixed(4), +r.w.toFixed(4)]); }
     return {
+      rail: this.crossings ? this.crossings.serialize() : undefined,
       course: this.course.serialize(),
       pieces: this.pieces.map((p) => ({ id: p.id, type: p.type, x: p.x, z: p.z, yaw: p.yaw })),
       placed: this.placed.map((p) => ({ type: p.type, x: p.x, z: p.z, yaw: p.yaw })),
@@ -1894,7 +1917,9 @@ export class Game {
     const designed = d.designed === true;
     // v0.4：ステージ1の設計図が長くなった。古い設計図のデータは配置を在庫に戻し、中間ゴールの記録も新しいコースに合わせて初期化
     const sameCourse = designed && (d.courseVer || 1) === (this.def.courseVer || 1);
-    if (!sameCourse) { d = { ...d, stock: (d.stock || 0) + (d.built || []).length + (d.loose || []).length, built: [], loose: [], stoppers: [], placed: designed ? d.placed : [], checkpoints: [], specials: [] }; }
+    if (!sameCourse) { d = { ...d, stock: (d.stock || 0) + (d.built || []).length + (d.loose || []).length, built: [], loose: [], stoppers: [], placed: [], checkpoints: [], specials: [], rail: null }; }
+    // 交差地点（階段・撤去）を先に戻す：階段の上のマスは高さが変わるので、ドミノを置く前に
+    if (this.crossings) this.crossings.load(d.rail);
     (d.checkpoints || []).forEach((v, i) => { if (this.checkpoints[i] && v) this.checkpoints[i].done = true; });
     (d.specials || []).forEach((v, i) => { if (this.specials[i] && v) this.specials[i].consumed = true; });
     (d.markers || []).forEach((v, i) => { const m = this.markers[i]; if (m && v) { m.consumed = true; if (m.mesh) this.scene.remove(m.mesh); } });

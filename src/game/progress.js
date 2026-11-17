@@ -58,6 +58,12 @@ export class Progress {
     const picks = [];
     // 最初のガチャ：回収担当を必ず候補に（おすすめ）。倒れたドミノを拾ってくれるので並べ直しが楽になる
     const first = !this.firstGachaDone;
+    // Ver.0.6：ステージ2のエリート建築士。最初のガチャでLv.1、その後4回以内にLv.2が必ず候補に出る
+    if (stage === 2) {
+      this.s2offers = (this.s2offers || 0) + 1;
+      const a = this.lv('architect');
+      if (a < 1 || (a < 2 && this.s2offers - (this.s2archAt || 0) >= 4)) picks.push({ id: 'architect', guaranteed: true, reason: a < 1 ? 'おすすめ！ 線路の上を越える建築の第一歩' : 'おすすめ！ Lv.2 でドミノ階段（立体交差）が建てられる' });
+    }
     if (first && PARTS.collector.stages.includes(stage) && this.lv('collector') < PARTS.collector.max) picks.push({ id: 'collector', guaranteed: true, reason: 'おすすめ！ 倒れたドミノを拾ってくれるので、並べ直しが楽になります' });
     // 確実に出す選択肢（防衛チュートリアルのストッパーズなど）
     for (const id of ticket.force || []) if (PARTS[id] && this.lv(id) < PARTS[id].max && !picks.some((p) => p.id === id)) picks.push({ id, guaranteed: true });
@@ -100,16 +106,18 @@ export class Progress {
     if (pick.id === 'xpPack') { this.addXP(30); return { kind: 'part', id: 'xpPack', level: 0 }; }
     if (pick.evo) { this.evolutions[pick.evo] = true; return { kind: 'evo', id: pick.evo }; }
     this.parts[pick.id] = this.lv(pick.id) + 1;
+    if (pick.id === 'architect') this.s2archAt = this.s2offers || 0;
     return { kind: 'part', id: pick.id, level: this.parts[pick.id] };
   }
 
-  serialize() { return { level: this.level, xp: this.xp, parts: this.parts, evolutions: this.evolutions, tickets: this.tickets, extraChoice: this.extraChoice, firstGachaDone: !!this.firstGachaDone }; }
+  serialize() { return { level: this.level, xp: this.xp, parts: this.parts, evolutions: this.evolutions, tickets: this.tickets, extraChoice: this.extraChoice, firstGachaDone: !!this.firstGachaDone, s2offers: this.s2offers || 0, s2archAt: this.s2archAt || 0 }; }
   load(d) {
     if (!d) return;
     this.level = d.level || 1; this.xp = d.xp || 0; this.parts = d.parts || {}; this.evolutions = d.evolutions || {};
     this.tickets = d.tickets || []; this.extraChoice = d.extraChoice || 0;
     // 既存セーブ：パーツを1つでも持っていれば最初のガチャは済んでいる
     this.firstGachaDone = d.firstGachaDone ?? Object.values(d.parts || {}).some((v) => v > 0);
+    this.s2offers = d.s2offers || 0; this.s2archAt = d.s2archAt || 0;
   }
 }
 

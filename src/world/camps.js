@@ -14,7 +14,7 @@ export const CAMP_INFO = {
   storage: { label: '倉庫（収納棚）', color: '#9c6b3a', icon: '🗄' },
 };
 // 役割 → 待機所
-export const ROLE_CAMP = { builder: 'builders', carrier: 'logistics', collector: 'logistics', stopperCrew: 'safety', restorer: 'safety', guard: 'safety', soldier: 'safety' };
+export const ROLE_CAMP = { builder: 'builders', carrier: 'logistics', collector: 'logistics', stopperCrew: 'safety', restorer: 'safety', guard: 'safety', soldier: 'safety', chief: 'builders', architect: 'builders', wrecker: 'logistics' };
 // 小型パーツ（収納棚に並ぶもの）
 export const SMALL_PARTS = ['boots', 'basket', 'level', 'clover', 'magnet', 'rewind', 'bell', 'barricade', 'sensor', 'footbridge'];
 

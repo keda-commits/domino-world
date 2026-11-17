@@ -15,6 +15,7 @@ const SAY = {
   restorer: ['復旧はおまかせ！', '出動準備よし！'],
   guard: ['警備開始！', 'ルンバは通さない！'],
   soldier: ['気をつけ！', '持ち場につきます！', 'ドミノは守ります！'],
+  chief: ['設計主任です。現場の段取りはお任せを'], architect: ['エリート建築士、参上！', '設計図はできています'], wrecker: ['撤去班、待機します'], railcrew: ['ぽっぽ線の保線係です']
 };
 
 /**
@@ -152,6 +153,12 @@ export class Gnome {
     const off = new THREE.Vector3(Math.cos(this.id * 2.4) * 2, 0, Math.sin(this.id * 2.4) * 2).add(home);
     this.goto(() => off, () => this.act(0.8, 'salute', () => this.think()));
   }
+  /** 手に持つ物（鉄道の修理班のレールなど） */
+  hold(kind) {
+    if (!this._holdG) { this._holdG = new THREE.Group(); this._holdG.position.set(0, 0.95, 0.15); this.m.pivot.add(this._holdG); }
+    this._holdG.clear();
+    if (kind === 'rail') { const r = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.1, 0.8), new THREE.MeshStandardMaterial({ color: '#1c7ed6', roughness: 0.4 })); this._holdG.add(r); }
+  }
   say(text, cls = '') { this.game.fx.floatObj(this.root, text, cls, 1.4); }
   releaseJob() {
     if (!this.job) return;
@@ -189,6 +196,10 @@ export class Gnome {
       case 'restorer': return this.thinkRestorer();
       case 'guard': return this.thinkGuard();
       case 'soldier': return this.thinkSoldier();
+      case 'chief': if (g.crossings && g.crossings.thinkChief(this)) return; break;
+      case 'architect': if (g.crossings && g.crossings.thinkArchitect(this)) return; break;
+      case 'wrecker': if (g.crossings && g.crossings.thinkWrecker(this)) return; break;
+      case 'railcrew': if (this.atSite) return this.act(0.5, 'idle', () => {}); break;
     }
     this.wait(1);
   }
@@ -671,6 +682,9 @@ export class Gnome {
       case 'pick': { const k = Math.sin(Math.min(1, this.poseT * 2.5) * Math.PI); lean = 0.8 * k; armL = armR = -0.6 * k - 0.2; break; }
       case 'kneel': { const k = Math.min(1, this.poseT * 4); lean = 0.6 * k; bob = -0.12 * k; legA = 0.9 * k; armL = armR = -1.0; break; }
       case 'salute': armR = -2.5; armRz = 0.9; armL = 0.05; bob = 0.02; break;
+      case 'read': armL = armR = -1.3; lean = 0.08; bob = Math.sin(this.poseT * 2) * 0.01; break;
+      case 'point': armR = -2.2; armL = -0.2; break;
+      case 'pry': { const k = Math.sin(this.poseT * 5); lean = 0.5 + k * 0.15; armR = -1.0 - k * 0.6; armL = -0.8; bob = -0.05; break; }
       case 'pushup': { const k = Math.abs(Math.sin(this.poseT * 4)); lean = 1.35; bob = -0.38 + k * 0.12; armL = armR = -1.4 - k * 0.2; break; }
       case 'dumbbell': { armL = -0.3 - Math.max(0, Math.sin(this.poseT * 5)) * 1.9; armR = -0.3 - Math.max(0, -Math.sin(this.poseT * 5)) * 1.9; bob = 0.01; break; }
       case 'sit': legA = -1.45; bob = -0.3; armL = armR = -0.3; lean = -0.1; break;

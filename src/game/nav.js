@@ -111,7 +111,7 @@ export class NavGrid {
    * A*：from → to の経路（Vector3 の点列、最後が to の近くの通れる点）。見つからなければ null
    * clearance：列車など大きいものは障害物から離れた所しか通らない
    */
-  path(from, to, clearance = 0, maxNodes = 30000) {
+  path(from, to, clearance = 0, maxNodes = Math.max(30000, Math.round(this.w * this.h * 0.7))) {
     const s0 = this.idx(from.x, from.z);
     const s = clearance === 0 && s0 >= 0 && this.stat[s0] === 0 ? s0 : this.nearestFree(from, clearance, 6), g = this.nearestFree(to, clearance, 10);
     this.lastCrossings = 0;
@@ -137,11 +137,11 @@ export class NavGrid {
         if (!soft && di && dj && (!this.free(j * W + ni, clearance) || !this.free(nj * W + i, clearance))) continue; // 角をすり抜けない
         if (soft && di && dj) continue; // またぐときはまっすぐ
         // 障害物のすぐ横は少し避ける（ドミノの列に沿ってぎりぎりを歩かない）
-        const nc = ck + (di && dj ? 1.414 : 1) + (soft ? 40 : this.clear[nk] <= 1 ? 0.6 : 0);
+        const nc = ck + (di && dj ? 1.414 : 1) + (soft ? 12 : this.clear[nk] <= 1 ? 0.6 : 0) /* 列をまたぐのは遠回りより少しだけ不利（大きすぎると探索が広がりすぎて道が見つからない） */;
         if (nc < (cost.get(nk) ?? Infinity)) {
           cost.set(nk, nc); prev.set(nk, k);
           const hx = Math.abs(ni - gi), hz = Math.abs(nj - gj);
-          open.push(nk, nc + (hx + hz) + (1.414 - 2) * Math.min(hx, hz));
+          open.push(nk, nc + 1.5 * ((hx + hz) + (1.414 - 2) * Math.min(hx, hz))); // 重み付き A*（広い部屋でも速く。少しだけ遠回りを許す）
         }
       }
     }
@@ -173,11 +173,19 @@ export class PathFollower {
    */
   next(nav, pos, goal, time) {
     const moved = !this.goal || this.goal.distanceTo(goal) > 1.0;
-    if (moved || !this.pts || time - this.t > 2.5 || (this.pts.length && nav.version !== this.ver && !nav.lineFree(pos, this.pts[0], this.clearance))) {
+    const blocked = !!(this.pts && this.pts.length && nav.version !== this.ver && !nav.lineFree(pos, this.pts[0], this.clearance));
+    const need = moved || !this.pts || time - this.t > 6 || blocked;
+    // さっき道が見つからなかった：少し待ってから探し直す（毎フレーム探すと重い）
+    if (need && this.failT != null && time - this.failT < 3 && this.goal && this.goal.distanceTo(goal) < 4) return null;
+    // 1フレームに引ける経路の数には上限がある（大勢が同時に引き直すと重くなる）。
+    // 順番待ちの間：定期的な引き直しなら前の道を使う。道がふさがった・目的地が変わったときは、その場で待つ（突っ込まない）
+    if (need && (nav.budget ?? 1) <= 0) { if (this.pts && this.pts.length && !moved && !blocked) return this.pts[0]; return null; }
+    if (need) {
+      nav.budget = (nav.budget ?? 1) - 1;
       this.goal = goal.clone(); this.t = time; this.ver = nav.version;
-      this.pts = nav.path(pos, goal, this.clearance);
-      if (!this.pts) { this.fail++; return null; }
-      this.fail = 0;
+      this.pts = nav.path(pos, goal, this.clearance, this.clearance >= 2 ? 20000 : undefined);
+      if (!this.pts) { this.fail++; this.failT = time; return null; }
+      this.fail = 0; this.failT = null;
     }
     while (this.pts.length > 1 && pos.distanceTo(this.pts[0]) < 0.35) this.pts.shift();
     // 先の点が見えていれば近道

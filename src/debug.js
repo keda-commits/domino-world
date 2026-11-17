@@ -140,7 +140,7 @@ export function installDebug(ctx) {
     botPlay: (sec, opts = {}) => {
       const g = game, log = [], dt = 1 / 20, t0 = g.time;
       g._botMode = true;
-      const prio = opts.prio || ['builder', 'collector', 'restorer', 'soldier', 'stopperCrew', 'carrier', 'footbridge', 'boots', 'basket', 'factory', 'train', 'bell', 'barricade', 'watchtower', 'guard', 'gate', 'sensor', 'level', 'magnet', 'clover', 'branch'];
+      const prio = opts.prio || ['architect', 'builder', 'collector', 'restorer', 'soldier', 'stopperCrew', 'carrier', 'footbridge', 'boots', 'basket', 'factory', 'train', 'bell', 'barricade', 'watchtower', 'guard', 'gate', 'sensor', 'level', 'magnet', 'clover', 'branch'];
       let placeAcc = 0, lastRunAt = -99, runs = 0;
       const note = (s) => log.push(`${Math.round(g.time - t0)}s Lv${g.progress.level} ${s}`);
       const pickGacha = () => {

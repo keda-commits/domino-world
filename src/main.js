@@ -211,7 +211,7 @@ function postGacha(r) {
   save();
   if (r && r.cleared && r.stage === 1 && !game.records[1].toldStage2) {
     game.records[1].toldStage2 = true;
-    ui.dialog('<h2>👑 STAGE 1 クリア！</h2><p>子ども部屋のベルが鳴り響いた！<br>次はリビングへ。そこには… 床を巡回する巨大なロボット掃除機が待っている。</p>', [{ label: '➡ STAGE 2 へ', fn: () => goStage(2) }, { label: 'もう少しここで遊ぶ', cls: 'sub' }]);
+    ui.dialog('<h2>👑 STAGE 1 クリア！</h2><p>子ども部屋のベルが鳴り響いた！<br>次はリビングへ。そこには… 青い線路を走る、おもちゃの鉄道が待っている。</p>', [{ label: '➡ STAGE 2 へ', fn: () => goStage(2) }, { label: 'もう少しここで遊ぶ', cls: 'sub' }]);
   }
   if (r && r.cleared && r.stage === 2 && !game.records[2].toldDog) { game.records[2].toldDog = true; ui.comingSoon(() => {}); }
 }
@@ -336,11 +336,13 @@ function followableAt(ev) {
   setNdc(ev); ray.setFromCamera(ndc, camera);
   const r = game.roomba;
   if (r && ray.intersectObject(r.group, true).length) return { get: () => r.pos.clone(), label: 'ルンバ' };
+  // ステージ2の列車：クリックで追いかける
+  for (const t of (game.railway && game.railway.trains) || []) if (ray.intersectObjects(t.cars, true).length) return { get: () => t.pos.clone(), label: t.name };
   return null;
 }
 function followEntry(e) {
   const w = e.kind === 'worker' ? game.workers.list.find((x) => x.root === e.obj) : null;
-  const label = w ? (PARTS[w.role] ? PARTS[w.role].name : '人') : e.name;
+  const label = w ? (PARTS[w.role] ? PARTS[w.role].name : { chief: '設計主任', wrecker: '撤去班', railcrew: '保線係' }[w.role] || '人') : e.name;
   rig.follow(() => (e.obj && e.obj.parent ? e.getPos() : null), label, e.kind === 'worker' || e.kind === 'threat' ? 7 : 12);
 }
 /** 置く以外の道具のクリック */
@@ -486,6 +488,7 @@ function frame(now) {
   // 俯瞰中は連鎖の先頭に光の柱を立てて位置を示す
   frontBeacon.visible = !!(game.run && game.run.kind === 'main' && rig.runView === 'overview' && ctx.front);
   if (frontBeacon.visible) { frontBeacon.position.set(ctx.front.x, 0, ctx.front.z); const k = 1 + Math.sin(now * 0.008) * 0.15; frontBeacon.scale.set(k, 1, k); }
+  game.cameraTarget = rig.controls.target;
   const cam = rig.update(real, ctx);
   gacha.update(real, camera, window.innerWidth, window.innerHeight);
   view.setDof(cam.dof && settings.quality === 'high', cam.focusDist);

@@ -70,7 +70,7 @@ export class Crate {
   /** 自動移動の行き先：建設の先頭の横で、ドミノの列から十分離れた所 */
   restSpot(front, out) {
     const g = this.game;
-    const ok = (p) => !g.stage.blocked(p.x, p.z, 1.4) && g.stage.inBounds(p.x, p.z, 1.2) && (!g.nav || g.nav.free(g.nav.idx(p.x, p.z), 3));
+    const ok = (p) => !g.stage.blocked(p.x, p.z, 1.4) && g.stage.inBounds(p.x, p.z, 1.2) && (!g.nav || g.nav.free(g.nav.idx(p.x, p.z), 3)) && !(g.railway && g.railway.track.onTrack(p.x, p.z, 1.6));
     for (const side of [3.2, -3.2, 4.2, -4.2]) { g.sideOf(front, side, out); if (ok(out)) return out; }
     return null;
   }

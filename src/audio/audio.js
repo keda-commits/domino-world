@@ -181,6 +181,22 @@ export class Audio {
     }
     this.hum.g.gain.setTargetAtTime(Math.min(0.06, vol * 0.13), this.ctx.currentTime, 0.3);
   }
+  /** Ver.0.6：おもちゃの電車のモーター音（ウィーン…と軽い。近いほど大きい） */
+  toyTrainHum(vol) {
+    if (!this.ok) return;
+    if (!this.trainHum) {
+      const o = this.ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.value = 118;
+      const o2 = this.ctx.createOscillator(); o2.type = 'square'; o2.frequency.value = 236;
+      const lfo = this.ctx.createOscillator(); lfo.frequency.value = 11; const lg = this.ctx.createGain(); lg.gain.value = 6; lfo.connect(lg).connect(o.frequency);
+      const f = this.ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 900; f.Q.value = 1.2;
+      const g2 = this.ctx.createGain(); g2.gain.value = 0.3;
+      const g = this.ctx.createGain(); g.gain.value = 0;
+      o.connect(f); o2.connect(g2).connect(f); f.connect(g); g.connect(this.sfx);
+      o.start(); o2.start(); lfo.start();
+      this.trainHum = { g };
+    }
+    this.trainHum.g.gain.setTargetAtTime(Math.min(0.05, vol * 0.05), this.ctx.currentTime, 0.25);
+  }
   /** 接近：近いほど間隔が短い「ピッ…ピッ」（小さく、緊張感だけ） */
   roombaNear(k, dt) {
     if (!this.ok || k <= 0) { this._nearT = 0; return; }

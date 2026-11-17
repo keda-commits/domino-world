@@ -5,7 +5,9 @@ import { PARTS, EVOLUTIONS } from '../data/parts.js';
  * カーソルの先にある 3D のもの（手前優先）の情報を、実際のゲームデータから作る。
  * 返り値：{ title, rows: [[ラベル, 値]], note, warn } または null
  */
-const ROLE_ICON = { builder: '👷', carrier: '📦', collector: '🧺', stopperCrew: '🦺', restorer: '🚑', guard: '👮' };
+const ROLE_ICON = { builder: '👷', carrier: '📦', collector: '🧺', stopperCrew: '🦺', restorer: '🚑', guard: '👮', soldier: '💂', chief: '🧑‍💼', architect: '📐', wrecker: '⛏', railcrew: '🔧' };
+const ROLE_NAME = { chief: '設計主任', wrecker: '撤去班', railcrew: 'ぽっぽ線の保線係' };
+const ROLE_NOTE = { chief: '現場監督（あなた）の参謀。建設が線路にぶつかると現場を確認し、エリート建築士に立体交差を指示するか、撤去班に線路の撤去を頼む', wrecker: '設計主任の指示で、ドミノのじゃまになる青い線路を取り外す', railcrew: 'おもちゃの鉄道の人。本番が終わると、外された線路を元に戻しに来る' };
 const STATE_TEXT = {
   walk: '移動中', flee: '避難中！', trip: '転んでいる…',
   act: { place: 'ドミノを設置中', pick: '拾う・立て直し中', kneel: 'ストッパー設置中', salute: '待機（敬礼）', idle: '待機中', cheer: '大喜び！', surprised: 'びっくり！', oops: 'あっ！（事故）', shrug: '在庫切れで待機', alarm: '警報！', carry: '運搬中' },
@@ -65,7 +67,9 @@ function describeWorker(game, w) {
     if (w.funKind) rows.push(['いま', (w.slacking ? 'サボり：' : '休けい：') + (FUN[w.funKind] || '休けい')]);
     if (w.slacks) rows.push(['サボった回数', `${w.slacks}回（レベルが上がると減る）`]);
   }
-  return { title: `${ROLE_ICON[w.role] || '🧑'} ${part ? part.name : w.role}`, rows, note: part ? part.desc : '' };
+  if (w.role === 'architect') rows.push(['得意な建築', game.level('architect') >= 2 ? '歩道橋・ドミノ階段（立体交差）' : '歩道橋（Lv.2 でドミノ階段も）']);
+  if (w.role === 'chief' && game.crossings) { const s = game.crossings.sites; rows.push(['交差地点', `${s.length}か所（立体交差${s.filter((x) => x.state === 'open' && x.plan === 'stairs').length}・撤去${s.filter((x) => x.state === 'open' && x.plan === 'removed').length}）`]); }
+  return { title: `${ROLE_ICON[w.role] || '🧑'} ${part ? part.name : ROLE_NAME[w.role] || w.role}`, rows, note: part ? part.desc : ROLE_NOTE[w.role] || '' };
 }
 
 function describeFacility(game, id, extra = []) {
@@ -93,6 +97,7 @@ export function describeAt(game, hand, ray) {
   for (const w of game.workers.list) add(w.root, () => describeWorker(game, w));
   if (game.roomba) add(game.roomba.group, () => describeRoomba(game, game.roomba));
   for (const th of game.threats || []) add(th.group, () => th.describe());
+  for (const t of (game.railway && game.railway.trains) || []) for (const c of t.cars) add(c, () => t.describe());
   for (const dp of game.depots) add(dp.mesh, () => ({ title: '🧸 おもちゃ箱（倉庫）', rows: [['在庫', `${game.stock}枚`]], note: 'ドラッグでドミノを1枚取り出せる' }));
   add(game.crate.group, () => ({ title: '📦 前線の資材箱', rows: [['中身', `${game.crate.count} / ${game.crate.cap}枚`]], note: '建設の先頭についていく。ドラッグで取り出せる' }));
   if (game.machineActive() && game.level('machine')) add(game.machine.group, () => describeFacility(game, 'machine', [['ホッパー', `${game.machine.hopper}枚`]]));

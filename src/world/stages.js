@@ -52,26 +52,29 @@ export const STAGES = {
   2: {
     id: 2,
     name: 'STAGE 2　リビング',
-    title: 'ルンバが来たぞ！',
-    goalText: 'ルンバから守り抜き、連鎖で巨大からくり装置を起動する',
+    title: 'ぽっぽ線がやってきた！',
+    goalText: '青い線路の向こうへドミノをつなぎ、連鎖で巨大からくり装置を起動する',
     target: 1300, // 設計規模（クリア条件ではない）
+    courseVer: 2, // Ver.0.6：鉄道（青いおもちゃの線路）と交差する設計図に作り直した
     bounds: { minX: -88.8, maxX: 88.8, minZ: -56.4, maxZ: 56.4 }, // Ver.0.5：約20%広く（コースはそのまま）
     floor: { w: 220, d: 160, tone: 'dark' },
     start: { x: -71.5, z: -42, yaw: 0 },
-    goal: { x: 48, z: 41, yaw: Math.PI / 2, type: 'machine' },
-    depots: [{ x: -66, z: 21.5 }, { x: -38, z: -42 }, { x: 27, z: -43.5 }, { x: 60, z: -20 }],
+    goal: { x: 46.6, z: 38, yaw: -Math.PI / 2, type: 'machine' },
+    depots: [{ x: -66, z: 21.5 }, { x: -38, z: -42 }, { x: 27, z: -43.5 }, { x: 70, z: -40 }],
     markers: [],
     chests: [],
     gachaMachine: null,
     towerSpot: { x: -52, z: 10 }, hqSpot: { x: -44, z: 51 },
     gachaSpot: { x: -28, z: -50.4, yaw: 0 },
-    // ルンバ以外の脅威：ソファの下のいたずらネズミ（局所）／転がるゴムボール（短時間・局所）
-    mouse: { den: { x: 5, z: -51.9 }, afterCheckpoint: 0, interval: [60, 95] },
-    ball: { rest: { x: -20, z: 46 }, radius: 1.3, speed: 13, targets: [[-10, -12], [20, 0], [0, -24], [30, -14], [-30, 4]], interval: [75, 115], firstDelay: 55 },
-    camps: { builders: { x: -62, z: 6 }, logistics: { x: -64, z: 44 }, safety: { x: -44, z: 48 }, machines: { x: 70, z: 7 }, storage: { x: 52.5, z: -54.2, yaw: 0 } },
+    // Ver.0.6：ステージ2は鉄道（おもちゃの青い線路）の勢力だけ。ルンバ・ネズミ・ボールは出ない
+    // 青い線路：角の丸い長方形の環状線（北側の一部は黄色い橋脚の高架）。ドミノのコースとは4か所で交わる
+    toyRail: { x0: -36, x1: 62, z0: -32, z1: 22, r: 8, elevated: { x0: -4, x1: 30, h: 2.4 }, station: { x: 12 }, depot: { z: -15 } },
+    camps: { builders: { x: -62, z: 12 }, logistics: { x: -64, z: 44 }, safety: { x: -44, z: 48 }, machines: { x: 72, z: 48 }, storage: { x: 52.5, z: -54.2, yaw: 0 } },
+    soldierPosts: [[-48, 14], [-10, 30], [30, -38], [-44, -30]],
     factorySpot: { x: -80, z: 29 },
     guardPosts: [[-48, 14], [0, 25.5], [52, 10], [20, -36], [-30, -37]],
-    roomba: {
+    roomba: null,
+    roombaOld: {
       dock: { x: 62, z: -51.4, yaw: 0 },
       radius: 3.0,
       // 巡回パターン（交互に実行・事前に床へ予告表示）
@@ -83,12 +86,12 @@ export const STAGES = {
       idleTime: 45, // 充電して待つ時間（常に壊し続けない）
     },
     checkpoints: [
-      { at: 150, type: 'flag', name: '廊下の旗' },
-      { at: 410, type: 'alarm', name: '警報ベル（ルンバを帰らせる）' },
-      { at: 760, type: 'gacha', name: '防衛ガチャマシン', category: 'defense' },
-      { at: 1060, type: 'alarm', name: '第2警報ベル' },
+      { at: 95, type: 'flag', name: '廊下の旗' },
+      { at: 420, type: 'bell', name: 'リビングのベル' },
+      { at: 700, type: 'gacha', name: '建築ガチャマシン', category: 'build' },
+      { at: 1240, type: 'bell', name: '大きなベル' },
     ],
-    specials: [{ at: 300, type: 'present' }, { at: 600, type: 'clover' }, { at: 930, type: 'present' }],
+    specials: [{ at: 300, type: 'present' }, { at: 600, type: 'clover' }, { at: 1000, type: 'present' }],
     suggested: [],
     build: buildStage2,
   },
@@ -309,18 +312,17 @@ function buildStage2(st) {
   const cp = st.add(new THREE.Mesh(P.rbox(56, 0.04, 40, 0.02, 2), pbr('poly_wool_herringbone', [6, 4.5], { maps: ['diff', 'nor_gl'], color: '#9fb0d6', normal: 1.2 })), 5, -8); cp.position.y = 0.02; cp.receiveShadow = true;
 
   st.group.add(model('sofa_02', { width: 36, x: 5, z: -49.9 })); st.rect(5, -49.4, 17, 6, 0, 10);
-  st.group.add(model('modern_coffee_table_01', { width: 18, fit: 'z', x: 5, z: -10 }));
-  for (const sz of [-1, 1]) st.rect(5, -10 + sz * 8.4, 4.5, 0.6, 0, 6); // V字の脚（両端）。間はルンバが通れる
-  st.add(P.tvStand(28, 6), 84.8, 0, -Math.PI / 2); st.rect(84.8, 0, 3, 14, 0, 30);
+  st.group.add(model('modern_coffee_table_01', { width: 18, fit: 'z', x: -10, z: 42 }));
+  for (const sz of [-1, 1]) st.rect(-10, 42 + sz * 8.4, 4.5, 0.6, 0, 6); // V字の脚（両端）
+  st.add(P.tvStand(28, 6), 20, 54.5, Math.PI); st.rect(20, 54.5, 14, 3, 0, 30);
   st.group.add(model('wooden_bookshelf_worn', { width: 16, x: 40, z: -53.7 })); st.rect(40, -53.9, 8.2, 2.2, 0, 18);
   st.prop(P.plant(1), -48, -51.4, 0, { r: 3.2 }, 10, '植木鉢');
   st.prop(P.plant(1.1), 84.3, -27, 0, { r: 3.4 }, 10, '植木鉢'); // 充電台への帰り道をふさがない位置
   st.prop(P.plant(0.9), -82.8, 53.4, 0, { r: 3 }, 10, '植木鉢');
-  st.group.add(model('ArmChair_01', { width: 15, x: 48, z: 26, yaw: -2.3 })); st.rect(48, 26, 7.5, 6.5, -2.3, 10);
+  st.group.add(model('ArmChair_01', { width: 15, x: 26, z: 47, yaw: Math.PI })); st.rect(26, 47, 7.5, 6.5, Math.PI, 10);
   st.prop(P.toyCar('#1c7ed6', 0.9), -30, 53.4, 1.2, { hw: 4.2, hd: 2.4 }, 4, 'おもちゃの車');
-  st.prop(P.blocks(4, 2), 30, 12, 0, { r: 2.4 }, 12, '積み木');
+  st.prop(P.blocks(4, 2), -60, 28, 0, { r: 2.4 }, 12, '積み木');
   st.prop(P.teddy(0.7), -78.8, 39.4, 1.0, { r: 3.6 }, 10, 'くまのぬいぐるみ');
-  st.add(P.dock(), 62, -53.9); st.rect(62, -53.9, 3.2, 1.2, 0, 3, { roomba: false });
 }
 
 function floor(w, d, mat) {
@@ -354,4 +356,22 @@ STAGES[1].suggested = [{
   ],
 }];
 STAGES[1].course = STAGES[1].suggested[0].pts;
-STAGES[2].course = STAGES[2].suggested[1].pts;
+// Ver.0.6：ステージ2の設計図。廊下から入り、青い環状線の中を往復しながら、線路と4か所で直角に交わる
+//   交差1（西側 x=-36, z=0）・交差2（東側 x=62, z=-22）・交差3（東側 z=6）・交差4（東側 z=11.5）
+STAGES[2].suggested.push({
+  name: 'ステージ2 設計図（鉄道版）',
+  pts: [
+    [-71.5, -42], [-71.5, -4], ...arc(-67.5, -4, 4, PI, PI / 2, 10),
+    [46, 0], ...arc(46, -2.75, 2.75, PI / 2, -PI / 2, 12),
+    [-22, -5.5], ...arc(-22, -8.25, 2.75, PI / 2, 1.5 * PI, 12),
+    [46, -11], ...arc(46, -13.75, 2.75, PI / 2, -PI / 2, 12),
+    [-22, -16.5], ...arc(-22, -19.25, 2.75, PI / 2, 1.5 * PI, 12),
+    [78, -22], ...arc(78, -18, 4, -PI / 2, 0, 10),
+    [82, 2], ...arc(78, 2, 4, 0, PI / 2, 10),
+    [-22, 6], ...arc(-22, 8.75, 2.75, -PI / 2, -1.5 * PI, 12),
+    [80, 11.5], ...arc(80, 15.5, 4, -PI / 2, 0, 10),
+    [84, 34], ...arc(80, 34, 4, 0, PI / 2, 10),
+    [48.6, 38],
+  ],
+});
+STAGES[2].course = STAGES[2].suggested[2].pts;

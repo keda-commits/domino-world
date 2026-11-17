@@ -42,6 +42,12 @@ export const PARTS = {
     desc: (lv) => `うっかりドミノを倒す確率 -30%（いま -${30 * lv}%）`,
   },
 
+  architect: {
+    // Ver.0.6：ステージ2から。設計主任の指示で、線路との交差地点を建築で解決する
+    name: 'エリート建築士', icon: '📐', category: 'build', rarity: 'rare', max: 2, stages: [2],
+    desc: (lv) => lv === 0 ? 'Lv.1：人が線路を安全に渡る歩道橋を架ける（よく渡る所に自動で）' : 'Lv.2：ドミノ階段（立体交差）も建てられる。ドミノは線路の上を越え、列車は下を通る',
+  },
+
   // ---------- 運搬・回収 ----------
   carrier: {
     name: '運搬担当', icon: '📦', category: 'logistics', rarity: 'common', max: 6, stages: [1, 2], minLevel: 2,
@@ -84,15 +90,15 @@ export const PARTS = {
     desc: (lv) => `事故現場へ駆けつけ、倒れたドミノを素早く起こす隊員（${lv}→${lv + 1}人）`,
   },
   watchtower: {
-    name: '見張り塔', icon: '🗼', category: 'defense', rarity: 'rare', max: 3, stages: [2],
+    name: '見張り塔', icon: '🗼', category: 'defense', rarity: 'rare', max: 3, stages: [] /* Ver.0.6：ルンバ用。ステージ2から外した */,
     desc: (lv) => `見張り係がルンバと事故を半径${12 + 6 * lv}で検知し警報。みんな早めに退避`,
   },
   guard: {
-    name: '警備係', icon: '👮', category: 'defense', rarity: 'rare', max: 4, stages: [2],
+    name: '警備係', icon: '👮', category: 'defense', rarity: 'rare', max: 4, stages: [] /* Ver.0.6：ルンバ用 */,
     desc: (lv) => `警報で出動し、ルンバの進路に臨時バリケードを置く隊員（${lv}→${lv + 1}人）`,
   },
   barricade: {
-    name: 'バリケード', icon: '🚧', category: 'defense', rarity: 'common', max: 5, stages: [1, 2], minLevel: 5,
+    name: 'バリケード', icon: '🚧', category: 'defense', rarity: 'common', max: 5, stages: [1], minLevel: 5,
     desc: (lv) => `柵を3つ追加（いま ${3 * lv}個）。暴走ミニカーを跳ね返し、ルンバは方向転換する。「配置」で置く`,
   },
   sensor: {
@@ -123,7 +129,7 @@ export const PARTS = {
     desc: (lv) => `ドミノがビー玉を押し出し、坂を転がって先のドミノへ（${lv}→${lv + 1}基）`,
   },
   bell: {
-    name: '特殊ベル', icon: '🔔', category: 'gimmick', rarity: 'rare', max: 2, stages: [2], minLevel: 4,
+    name: '特殊ベル', icon: '🔔', category: 'gimmick', rarity: 'rare', max: 2, stages: [] /* Ver.0.6：ルンバ用 */, minLevel: 4,
     desc: () => 'コースの横に置く警報ベル。連鎖で鳴ると、ルンバが充電台へ帰りみんな退避',
   },
 
@@ -185,7 +191,7 @@ export const GACHA = {
     { level: 7, id: 'stopperCrew', when: (p) => (p.stopperCrew || 0) === 0 },
     { level: 8, id: 'barricade', when: (p) => (p.barricade || 0) === 0 }, // 暴走ミニカー（Lv7〜）への対策
   ],
-  stage2DefenseBias: 1.8, // ステージ2での防衛パーツの重み倍率
+  stage2DefenseBias: 1.0, // Ver.0.6：ステージ2にルンバはいない
   stage1DefenseBias: 1.7, // ステージ1：レベル5（敵が増え始める）からの防衛パーツの重み倍率
   stage1DefenseFrom: 5,
   repeatPenalty: 0.6, // 前回出たパーツの重み

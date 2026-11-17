@@ -26,7 +26,8 @@ export const ROLE_STYLE = {
   guard: { body: '#16295a', hat: '#1f6fe0', leg: '#101a33', kind: 'stopper', vest: '#ff7a1a', badge: true },
   // おもちゃの兵隊：赤い上着・白いたすき・黒い筒帽
   soldier: { body: '#d6336c', hat: '#1b1b3a', leg: '#1b1b3a', kind: 'soldier' },
-  // 鉄道勢力の試作（Ver.0.6 試作）：エリート建築士・レールはがし隊・鉄道の修理班・駅長
+  // Ver.0.6：設計主任（紺の上着・黄色いヘルメット）・エリート建築士・撤去班・鉄道の修理班・駅長
+  chief: { body: '#364fc7', hat: '#fcc419', leg: '#212529', kind: 'hardhat' },
   architect: { body: '#f1f3f5', hat: '#ffffff', leg: '#2b3a55', kind: 'hardhat' },
   wrecker: { body: '#f76707', hat: '#212529', leg: '#495057', kind: 'hardhat' },
   railcrew: { body: '#1c3d7a', hat: '#1c3d7a', leg: '#14284f', kind: 'cap' },
@@ -195,6 +196,10 @@ export function buildGnome(role) {
     reacher.position.set(0, -0.22, 0.04);
     armR.add(reacher);
   }
+  // 設計主任：設計図の筒（左手）／撤去班：バール（右手）
+  if (role === 'chief') { const r = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.55, 8), new THREE.MeshStandardMaterial({ color: '#4dabf7' })); r.rotation.x = Math.PI / 2; r.position.set(0, -0.26, 0.1); armL.add(r); }
+  if (role === 'architect') { const r = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.32, 0.06), new THREE.MeshStandardMaterial({ color: '#8a5a30' })); r.position.set(0, -0.3, 0.06); armR.add(r); const h = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.08, 0.08), new THREE.MeshStandardMaterial({ color: '#868e96', metalness: 0.6 })); h.position.set(0, -0.46, 0.06); armR.add(h); }
+  if (role === 'wrecker') { const b = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.9, 6), new THREE.MeshStandardMaterial({ color: '#adb5bd', metalness: 0.6 })); b.position.set(0, -0.5, 0.05); armR.add(b); }
   let gun = null, shield = null;
   if (role === 'soldier') {
     gun = new THREE.Group();
