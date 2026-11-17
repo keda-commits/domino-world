@@ -182,7 +182,7 @@ class StageRuntime {
 
   inBounds(x, z, m = 0) { const b = this.bounds; return x >= b.minX + m && x <= b.maxX - m && z >= b.minZ + m && z <= b.maxZ - m; }
   /** 建設できない場所か（家具・おもちゃ・設備） */
-  blocked(x, z, m = 0, forRoomba = false) {
+  blocked(x, z, m = 0, forRoomba = false, ignoreMovable = false) {
     for (const o of this.obstacles) {
       if (forRoomba ? !o.roomba : !o.build) continue;
       if (o.r != null) { if ((x - o.x) ** 2 + (z - o.z) ** 2 < (o.r + m) ** 2) return true; continue; }

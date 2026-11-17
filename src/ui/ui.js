@@ -5,8 +5,8 @@ import { STAGES } from '../world/stages.js';
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => Math.floor(n).toLocaleString('ja-JP');
 const ROLE_LABEL = { builder: '👷 建設担当', carrier: '📦 運搬担当', collector: '🧺 回収担当', stopperCrew: '🦺 ストッパー設置係', restorer: '🚑 復旧係', guard: '👮 警備係' };
-const PIECE_ICON = { bell: '🔔', barricade: '🚧', sensor: '📡' };
-const STAGE_PIECES = ['bell', 'barricade', 'sensor'];
+const PIECE_ICON = { bell: '🔔', barricade: '🚧', sensor: '📡', footbridge: '🪜' };
+const STAGE_PIECES = ['footbridge', 'bell', 'barricade', 'sensor'];
 
 /** 画面の HUD・メニュー（コンパクト版） */
 export class UI {
@@ -45,7 +45,7 @@ export class UI {
     const pop = $('piece-pop');
     if (t === 'pieces') {
       const types = STAGE_PIECES.filter((p) => this.g.level(p) > 0);
-      pop.innerHTML = types.length ? types.map((p) => `<button data-piece="${p}">${PIECE_ICON[p]} ${PIECE_LABEL[p]}（残り${this.g.placeableCount(p) - this.g.placeableUsed(p)}）</button>`).join('') : '<span style="font-size:12px;color:#d9c9b6">ガチャで警報ベル・バリケード・接近センサーを手に入れると置けます（ステージ2）</span>';
+      pop.innerHTML = types.length ? types.map((p) => `<button data-piece="${p}">${PIECE_ICON[p]} ${PIECE_LABEL[p]}（残り${this.g.placeableCount(p) - this.g.placeableUsed(p)}）</button>`).join('') : '<span style="font-size:12px;color:#d9c9b6">ガチャで歩道橋・防衛設備を手に入れると置けます</span>';
       pop.querySelectorAll('[data-piece]').forEach((b) => (b.onclick = () => this.h.setTool('piece:' + b.dataset.piece)));
       pop.classList.remove('hidden');
     } else if (!t.startsWith('piece:')) pop.classList.add('hidden');

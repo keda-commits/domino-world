@@ -1,0 +1,187 @@
+import * as THREE from 'three';
+
+/**
+ * 経路探索（Ver.0.5）：軽量なグリッド A*
+ *
+ * Recast（ナビメッシュ）や Rapier の Character Controller も調べたが、このゲームは
+ * 「平らな床＋家具（静的）＋ドミノの列（毎秒のように増減）」で、障害物の形がほぼ点の集まり。
+ * ナビメッシュは列が変わるたびに作り直しが必要で重く、キャラクターコントローラーは衝突の解決であって
+ * 経路は決めてくれない。そこで 0.5 単位のグリッドに
+ *   - 家具・壁・小物（stage.obstacles）
+ *   - 床にあるドミノ（立っている・倒れている）
+ * を書き込み、A* で経路を求めて、見通しのよい所は直線にまとめる（文字列引き）。
+ * ドミノは 0.5 秒ごとに書き直す。歩道橋の上は、下にドミノがあっても通れる。
+ * 「すき間」：ドミノどうしの間が 1 マス以上空いていれば通り抜けられる。
+ */
+const CELL = 0.5;
+
+class Heap {
+  constructor() { this.a = []; }
+  push(n, f) { const a = this.a; a.push([f, n]); let i = a.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (a[p][0] <= a[i][0]) break; [a[p], a[i]] = [a[i], a[p]]; i = p; } }
+  pop() { const a = this.a; const top = a[0]; const last = a.pop(); if (a.length) { a[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < a.length && a[l][0] < a[m][0]) m = l; if (r < a.length && a[r][0] < a[m][0]) m = r; if (m === i) break; [a[m], a[i]] = [a[i], a[m]]; i = m; } } return top[1]; }
+  get size() { return this.a.length; }
+}
+
+export class NavGrid {
+  constructor(game) {
+    this.game = game;
+    const b = game.stage.bounds;
+    this.x0 = b.minX; this.z0 = b.minZ;
+    this.w = Math.ceil((b.maxX - b.minX) / CELL); this.h = Math.ceil((b.maxZ - b.minZ) / CELL);
+    this.stat = new Uint8Array(this.w * this.h); // 家具・壁（1=通れない）
+    this.dyn = new Uint8Array(this.w * this.h); // ドミノ
+    this.bridge = new Uint8Array(this.w * this.h); // 歩道橋の通路
+    this.clear = new Uint8Array(this.w * this.h); // 障害物からの距離（マス数、最大15）
+    this.version = 0; this.dynT = -1;
+    this.buildStatic();
+  }
+  idx(x, z) { const i = Math.floor((x - this.x0) / CELL), j = Math.floor((z - this.z0) / CELL); return i < 0 || j < 0 || i >= this.w || j >= this.h ? -1 : j * this.w + i; }
+  center(k) { return new THREE.Vector3(this.x0 + ((k % this.w) + 0.5) * CELL, 0, this.z0 + (Math.floor(k / this.w) + 0.5) * CELL); }
+  buildStatic() {
+    const st = this.game.stage;
+    this.bridge.fill(0); // 歩道橋は呼び出し側で登録し直す
+    for (let j = 0; j < this.h; j++) for (let i = 0; i < this.w; i++) {
+      const x = this.x0 + (i + 0.5) * CELL, z = this.z0 + (j + 0.5) * CELL;
+      this.stat[j * this.w + i] = !st.inBounds(x, z, 0.4) || st.blocked(x, z, 0.3, false) ? 1 : 0;
+    }
+    this.dynT = -1;
+  }
+  /** 歩道橋の通路を登録（両端の階段の間。幅1マス強） */
+  addBridge(a, b) {
+    const len = a.distanceTo(b), n = Math.ceil(len / (CELL * 0.5));
+    for (let s = 0; s <= n; s++) {
+      const p = a.clone().lerp(b, s / n);
+      for (const o of [-0.4, 0, 0.4]) { const k = this.idx(p.x + o, p.z + o); if (k >= 0) this.bridge[k] = 1; const k2 = this.idx(p.x - o, p.z + o); if (k2 >= 0) this.bridge[k2] = 1; }
+    }
+    this.dynT = -1;
+  }
+  /** ドミノを書き込む（0.5秒ごと） */
+  refresh(time) {
+    if (time - this.dynT < 0.5) return;
+    this.dynT = time;
+    this.dyn.fill(0);
+    for (const d of this.game.dominoes.list) {
+      if (d.held || d.removed) continue;
+      const t = d.body.translation();
+      if (t.y > 1.5) continue;
+      // ドミノの足元（幅0.5）＋すり抜けない余白：列が途切れず「壁」になる（すき間が1マス以上あれば通れる）
+      for (const ox of [-0.32, 0, 0.32]) for (const oz of [-0.32, 0, 0.32]) { const k = this.idx(t.x + ox, t.z + oz); if (k >= 0) this.dyn[k] = 1; }
+      // 倒れているドミノは長いので両端も
+      if (d.toppled) {
+        const r = d.body.rotation(); const ax = 2 * (r.x * r.y - r.w * r.z), az = 2 * (r.y * r.z + r.w * r.x);
+        for (const s of [-0.4, 0.4]) { const k2 = this.idx(t.x + ax * s, t.z + az * s); if (k2 >= 0) this.dyn[k2] = 1; }
+      }
+    }
+    // 障害物からの距離（多点 BFS）
+    const W = this.w, H = this.h, c = this.clear;
+    const q = new Int32Array(W * H); let qh = 0, qt = 0;
+    for (let k = 0; k < W * H; k++) { if (this.blockedK(k)) { c[k] = 0; q[qt++] = k; } else c[k] = 15; }
+    while (qh < qt) { const k = q[qh++]; const i = k % W, j = (k / W) | 0; const nv = c[k] + 1; if (nv >= 15) continue; for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const ni = i + di, nj = j + dj; if (ni < 0 || nj < 0 || ni >= W || nj >= H) continue; const nk = nj * W + ni; if (c[nk] > nv) { c[nk] = nv; q[qt++] = nk; } } }
+    this.version++;
+  }
+  /** ドミノの列をまたいでいるマス（歩道橋の上は除く） */
+  isCrossing(k) { return k >= 0 && this.dyn[k] === 1 && this.bridge[k] !== 1 && this.stat[k] === 0; }
+  blockedK(k) { return this.stat[k] === 1 || (this.dyn[k] === 1 && this.bridge[k] !== 1); }
+  /** 通れるか（clearance：必要な余白マス数） */
+  free(k, clearance = 0) { return k >= 0 && !this.blockedK(k) && this.clear[k] >= clearance; }
+  /** p に一番近い通れるマス */
+  nearestFree(p, clearance = 0, maxR = 8) {
+    const k0 = this.idx(p.x, p.z);
+    if (this.free(k0, clearance)) return k0;
+    const i0 = Math.floor((p.x - this.x0) / CELL), j0 = Math.floor((p.z - this.z0) / CELL);
+    for (let r = 1; r <= maxR; r++) {
+      let best = -1, bd = Infinity;
+      for (let dj = -r; dj <= r; dj++) for (let di = -r; di <= r; di++) {
+        if (Math.max(Math.abs(di), Math.abs(dj)) !== r) continue;
+        const i = i0 + di, j = j0 + dj; if (i < 0 || j < 0 || i >= this.w || j >= this.h) continue;
+        const k = j * this.w + i; if (!this.free(k, clearance)) continue;
+        const d = di * di + dj * dj; if (d < bd) { bd = d; best = k; }
+      }
+      if (best >= 0) return best;
+    }
+    return -1;
+  }
+  /** 直線で通れるか（マスをたどる） */
+  lineFree(a, b, clearance = 0) {
+    const d = a.distanceTo(b), n = Math.max(1, Math.ceil(d / (CELL * 0.5)));
+    for (let s = 1; s < n; s++) { const t = s / n; if (!this.free(this.idx(a.x + (b.x - a.x) * t, a.z + (b.z - a.z) * t), clearance)) return false; }
+    return true;
+  }
+  /**
+   * A*：from → to の経路（Vector3 の点列、最後が to の近くの通れる点）。見つからなければ null
+   * clearance：列車など大きいものは障害物から離れた所しか通らない
+   */
+  path(from, to, clearance = 0, maxNodes = 30000) {
+    const s0 = this.idx(from.x, from.z);
+    const s = clearance === 0 && s0 >= 0 && this.stat[s0] === 0 ? s0 : this.nearestFree(from, clearance, 6), g = this.nearestFree(to, clearance, 10);
+    this.lastCrossings = 0;
+    if (s < 0 || g < 0) return null;
+    if (s === g) return [to.clone()];
+    const W = this.w;
+    const gi = g % W, gj = (g / W) | 0;
+    const cost = new Map([[s, 0]]), prev = new Map();
+    const open = new Heap(); open.push(s, 0);
+    let n = 0;
+    while (open.size) {
+      const k = open.pop();
+      if (k === g) break;
+      if (++n > maxNodes) return null;
+      const i = k % W, j = (k / W) | 0, ck = cost.get(k);
+      for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+        if (!di && !dj) continue;
+        const ni = i + di, nj = j + dj; if (ni < 0 || nj < 0 || ni >= W || nj >= this.h) continue;
+        const nk = nj * W + ni;
+        // 人（clearance 0）は、ほかに道がなければドミノの列を「またいで」通れる（とても高いコスト。危険）
+        const soft = clearance === 0 && this.stat[nk] === 0 && this.dyn[nk] === 1 && this.bridge[nk] !== 1;
+        if (!soft && !this.free(nk, clearance)) continue;
+        if (!soft && di && dj && (!this.free(j * W + ni, clearance) || !this.free(nj * W + i, clearance))) continue; // 角をすり抜けない
+        if (soft && di && dj) continue; // またぐときはまっすぐ
+        // 障害物のすぐ横は少し避ける（ドミノの列に沿ってぎりぎりを歩かない）
+        const nc = ck + (di && dj ? 1.414 : 1) + (soft ? 40 : this.clear[nk] <= 1 ? 0.6 : 0);
+        if (nc < (cost.get(nk) ?? Infinity)) {
+          cost.set(nk, nc); prev.set(nk, k);
+          const hx = Math.abs(ni - gi), hz = Math.abs(nj - gj);
+          open.push(nk, nc + (hx + hz) + (1.414 - 2) * Math.min(hx, hz));
+        }
+      }
+    }
+    if (!prev.has(g)) return null;
+    const cells = []; for (let k = g; k !== s; k = prev.get(k)) cells.push(k); cells.reverse();
+    this.lastCrossings = cells.filter((k) => this.isCrossing(k)).length;
+    // 見通しのよい所は直線にまとめる
+    const pts = [from.clone()];
+    let anchor = from.clone();
+    for (let a = 0; a < cells.length; a++) {
+      const next = a + 1 < cells.length ? this.center(cells[a + 1]) : null;
+      const cur = this.center(cells[a]);
+      if (!next || !this.lineFree(anchor, next, clearance)) { pts.push(cur); anchor = cur; }
+    }
+    const end = this.center(g);
+    if (!this.free(this.idx(to.x, to.z), clearance)) pts.push(end); else pts.push(to.clone());
+    pts.shift();
+    return pts;
+  }
+}
+
+/** 経路をたどる小さなヘルパー（人・列車で共通） */
+export class PathFollower {
+  constructor(clearance = 0) { this.clearance = clearance; this.pts = null; this.goal = null; this.t = 0; this.ver = -1; this.fail = 0; }
+  reset() { this.pts = null; this.goal = null; }
+  /**
+   * 次に向かう点。目的地が大きく動いた・時間が経った・道がふさがったら引き直す
+   * 経路が見つからないときは null（呼び出し側で直進するか待つか決める）
+   */
+  next(nav, pos, goal, time) {
+    const moved = !this.goal || this.goal.distanceTo(goal) > 1.0;
+    if (moved || !this.pts || time - this.t > 2.5 || (this.pts.length && nav.version !== this.ver && !nav.lineFree(pos, this.pts[0], this.clearance))) {
+      this.goal = goal.clone(); this.t = time; this.ver = nav.version;
+      this.pts = nav.path(pos, goal, this.clearance);
+      if (!this.pts) { this.fail++; return null; }
+      this.fail = 0;
+    }
+    while (this.pts.length > 1 && pos.distanceTo(this.pts[0]) < 0.35) this.pts.shift();
+    // 先の点が見えていれば近道
+    if (this.pts.length > 1 && nav.lineFree(pos, this.pts[1], this.clearance)) this.pts.shift();
+    return this.pts[0] || goal;
+  }
+}

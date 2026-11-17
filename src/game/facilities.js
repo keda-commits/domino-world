@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { CFG } from '../config.js';
 import { MAT, rbox, shadow, toyBox } from '../world/props.js';
 import { trainMesh } from '../world/devices.js';
+import { PathFollower } from './nav.js';
+import { R } from '../core/physics.js';
 
 const miniGeo = new THREE.BoxGeometry(CFG.dominoW * 0.7, CFG.dominoH * 0.7, CFG.dominoT * 0.9);
 const miniMats = ['#ff3b3b', '#ffd21f', '#1fa8ff', '#3ccf5a', '#ff8a1f', '#6b5cff', '#ff5cb0'].map((c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.35 }));
@@ -46,11 +48,15 @@ export class Crate {
     this.pos = this.group.position;
     this.count = 0;
     this.cap = 60;
+    // 資材箱の当たり判定（ドミノや小物がぶつかる。動かすと一緒に動く）
+    this.body = game.physics.world.createRigidBody(R.RigidBodyDesc.kinematicPositionBased().setTranslation(0, -5, 0));
+    game.physics.world.createCollider(R.ColliderDesc.cuboid(1.2, 0.38, 0.9).setTranslation(0, 0.38, 0).setFriction(0.6), this.body);
     this._v = new THREE.Vector3();
     this.moving = false;
   }
   spot(id, out) { const a = (id * 2.399) % (Math.PI * 2); return out.set(this.pos.x + Math.cos(a) * 1.6, 0, this.pos.z + Math.sin(a) * 1.4); }
   take(n) { const t = Math.min(n, this.count); this.count -= t; return t; }
+  syncCollider() { this.body.setNextKinematicTranslation({ x: this.pos.x, y: this.pos.y, z: this.pos.z }); this.body.setNextKinematicRotation(this.game.physics.quatYaw(this.group.rotation.y)); }
   update(dt) {
     const g = this.game;
     this.cap = 60 + 30 * g.level('basket') + (g.level('train') ? 60 : 0);
@@ -69,6 +75,7 @@ export class Crate {
       }
     }
     if (!this.carried) this.pos.y = g.stage.heightAt(this.pos.x, this.pos.z);
+    this.syncCollider();
     const show = Math.min(24, Math.ceil(this.count / Math.max(1, this.cap / 24)));
     for (let i = 0; i < 24; i++) this.minis[i].visible = i < show;
   }
@@ -164,11 +171,24 @@ export class Train {
     const cap = 20 * (lv + 1);
     const home = g.depots[0].pos;
     const dest = g.evolved('fastLine') && g.level('machine') ? g.machine.pos : g.crate.pos;
+    // ドミノの列・家具・資材箱をよけて走る（車体が大きいので、障害物から1単位以上離れた道だけ）
+    this.pf ||= new PathFollower(2);
     const go = (tgt, sp) => {
-      const dx = tgt.x - this.pos.x, dz = tgt.z - this.pos.z, d = Math.hypot(dx, dz);
-      if (d < 2.4) return true;
-      this.pos.x += (dx / d) * Math.min(d, sp * dt); this.pos.z += (dz / d) * Math.min(d, sp * dt);
-      this.mesh.rotation.y = Math.atan2(dx, dz);
+      const d = Math.hypot(tgt.x - this.pos.x, tgt.z - this.pos.z);
+      if (d < 2.4) { this.pf.reset(); return true; }
+      const wp = g.nav ? this.pf.next(g.nav, this.pos, tgt, g.time) : tgt;
+      if (!wp) {
+        // 道がない：ドミノの列や家具を貫通せず、その場で待つ（荷物は倉庫に戻す）
+        this.waitT = (this.waitT || 0) + dt;
+        if (this.waitT > 6 && this.load > 0) { g.stock += this.load; this.load = 0; this.state = 'load'; g.fx.floatAt(this.pos.clone().setY(2.4), '🚂 線路がふさがれて届けられない…', 'warn', 2); }
+        if (this.waitT > 6) this.waitT = 0;
+        return false;
+      }
+      this.waitT = 0;
+      const dx = wp.x - this.pos.x, dz = wp.z - this.pos.z, dd = Math.hypot(dx, dz) || 1;
+      this.pos.x += (dx / dd) * Math.min(dd, sp * dt); this.pos.z += (dz / dd) * Math.min(dd, sp * dt);
+      let dy = Math.atan2(dx, dz) - this.mesh.rotation.y; dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+      this.mesh.rotation.y += dy * Math.min(1, dt * 6);
       return false;
     };
     const sp = 9 * g.odMult();

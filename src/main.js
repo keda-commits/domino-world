@@ -273,7 +273,7 @@ canvas.addEventListener('pointermove', (ev) => {
   const p = floorPoint(ev);
   if (p && tool.startsWith('piece:')) {
     const type = tool.slice(6);
-    pieceGhost.scale.set(type === 'barricade' ? 5.2 : 1.6, 1, type === 'barricade' ? 0.8 : 1.6);
+    pieceGhost.scale.set(type === 'barricade' ? 5.2 : type === 'footbridge' ? 7.5 : 1.6, 1, type === 'barricade' ? 0.8 : type === 'footbridge' ? 1.3 : 1.6);
     pieceGhost.position.set(p.x, 0.2, p.z);
     pieceGhost.rotation.y = pieceYaw;
     pieceGhost.material.color.set(game.canPlacePiece(type, p.x, p.z, pieceYaw).ok ? '#7cd4ff' : '#ff6b6b');

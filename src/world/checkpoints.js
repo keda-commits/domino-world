@@ -1,14 +1,12 @@
 import * as THREE from 'three';
 import { CFG } from '../config.js';
 import { MAT, rbox, shadow } from './props.js';
-import { hingedPaddle } from './devices.js';
 
 const mesh = (g, m, x = 0, y = 0, z = 0) => { const o = new THREE.Mesh(g, m); o.position.set(x, y, z); return o; };
 
 /**
  * 中間ゴール（通過式のおもちゃ装置）。
- * コース上のドミノを「幅広ドミノ」にし、本線の次のドミノと、横に立てたスイッチ板の両方を倒す。
- * スイッチ板（回転ジョイント）が物理的に倒れると装置が作動する。本線の連鎖はそのまま先へ進む。
+ * 通常のドミノが倒れると、すき間に立つレバーを押し倒し、横の装置（ベル・旗など）が動く。本線の連鎖はそのまま先へ進む。
  */
 export class Checkpoint {
   constructor(scene, physics, slot, side, def, index) {
@@ -17,14 +15,28 @@ export class Checkpoint {
     this.fired = false; // この回の連鎖で作動したか
     const fx = Math.sin(slot.yaw), fz = Math.cos(slot.yaw);
     const nx = Math.cos(slot.yaw), nz = -Math.sin(slot.yaw);
-    const yaw = slot.yaw + side * 0.3;
-    const px = slot.x + fx * CFG.spacing * 0.95 + nx * side * 0.55;
-    const pz = slot.z + fz * CFG.spacing * 0.95 + nz * side * 0.55;
-    this.paddle = hingedPaddle(physics, { x: px, z: pz, yaw, y: slot.y || 0 }, 0.45, 0.95, 0.08, 0.2);
-    const col = { bell: '#ffd21f', flag: '#ff4d6d', gacha: '#4dabf7', alarm: '#e8233f', switch: '#69db7c' }[def.type] || '#ffd21f';
-    this.paddleMesh = mesh(rbox(0.45, 0.95, 0.08, 0.03), MAT.plastic(col));
-    this.paddleMesh.castShadow = true;
+    // Ver.0.5：中間ゴール用の幅広ドミノは廃止。通常のドミノが倒れるときに、すぐ横の「レバー」を押す。
+    // レバーはドミノと次のドミノのすき間・少し横（ドミノの幅の内側）にあり、とても軽いので連鎖はそのまま先へ続く。
+    // 見た目はドミノと違う赤い棒＋玉。倒れると横の装置（ベル・旗など）が動く
+    const yaw = slot.yaw;
+    const px = slot.x + fx * CFG.spacing * 0.5 + nx * side * 0.2;
+    const pz = slot.z + fz * CFG.spacing * 0.5 + nz * side * 0.2;
+    // レバーは当たり判定を持たない仕掛け：中間ゴールのドミノが倒れて、先端がレバーに届いた所から一緒に倒れる。
+    // （物理のレバーだと、倒れたまま次のマスに横たわって建て直しを邪魔したり、倒れた山と押し合ったりしたため）
+    const lever = new THREE.Group(); // 根もと（ここを軸に前へ倒れる）
+    lever.position.set(px, slot.y || 0, pz); lever.rotation.y = yaw;
+    const stick = mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.9, 10), MAT.plastic('#e03131'), 0, 0.45, 0); lever.add(stick);
+    const knob = mesh(new THREE.SphereGeometry(0.11, 14, 10), MAT.plastic('#ffd43b'), 0, 0.92, 0); lever.add(knob);
+    this.leverAngle = 0;
+    // ドミノの先端がレバーに届く傾き（レバーはドミノの 0.3 先）
+    this.contact = Math.asin(Math.min(1, (CFG.spacing * 0.5) / (CFG.dominoH * 0.95)));
+    this.paddle = { angle: () => this.leverAngle, reset: () => { this.leverAngle = 0; }, dispose: () => {} };
+    this.paddleMesh = lever;
+    lever.traverse((o) => { o.castShadow = true; });
     scene.add(this.paddleMesh);
+    // 足元の台（レバーの根もと。ドミノとは違う金属の台）
+    this.leverBase = mesh(new THREE.CylinderGeometry(0.14, 0.18, 0.08, 12), MAT.metal('#868e96'), px, (slot.y || 0) + 0.04, pz);
+    scene.add(this.leverBase);
     // 装置本体（スイッチ板の横）
     const toy = new THREE.Group();
     const tx = slot.x + fx * 0.6 + nx * side * 2.3, tz = slot.z + fz * 0.6 + nz * side * 2.3;
@@ -35,7 +47,7 @@ export class Checkpoint {
     const wood = MAT.wood('#c98c55');
     toy.add(mesh(rbox(1.6, 0.3, 1.6, 0.08), wood, 0, 0.15, 0));
     // 板と装置をつなぐ棒
-    const rod = mesh(new THREE.CylinderGeometry(0.04, 0.04, 1.9, 6), MAT.metal('#adb5bd'), -side * 1.0, 0.25, -0.1);
+    const rod = mesh(new THREE.CylinderGeometry(0.04, 0.04, 2.0, 6), MAT.metal('#adb5bd'), -side * 1.05, 0.12, -0.3);
     rod.rotation.z = Math.PI / 2;
     toy.add(rod);
     this.anim = new THREE.Group();
@@ -82,8 +94,22 @@ export class Checkpoint {
 
   /** 毎フレーム：スイッチ板が物理的に倒れたか */
   update(dt) {
-    this.paddle.sync(this.paddleMesh);
-    if (!this.fired && this.paddle.angle() > 0.4) { this.fired = true; this.t = 0; if (this.onTrigger) this.onTrigger(this); }
+    // 中間ゴールのドミノの傾き → レバーの傾き（先端が届いてから一緒に倒れる。ドミノが起き上がればレバーも戻る）
+    const d = this.slot.domino;
+    let want = 0;
+    if (d && !d.removed) {
+      const r = d.body.rotation();
+      // 前（列の進む向き）へ倒れているときだけ
+      const fx = Math.sin(this.slot.yaw), fz = Math.cos(this.slot.yaw);
+      const ux = 2 * (r.x * r.y - r.w * r.z), uz = 2 * (r.y * r.z + r.w * r.x);
+      const tilt = Math.acos(Math.max(-1, Math.min(1, 1 - 2 * (r.x * r.x + r.z * r.z))));
+      const forward = ux * fx + uz * fz;
+      if (forward > 0.05 && tilt > this.contact) want = Math.min(1.45, (tilt - this.contact) * 1.7);
+    }
+    if (this.fired) want = Math.max(want, this.leverAngle); // 一度倒れたら、その回はそのまま
+    this.leverAngle += (want - this.leverAngle) * Math.min(1, dt * (want > this.leverAngle ? 30 : 4));
+    this.paddleMesh.rotation.x = this.leverAngle;
+    if (!this.fired && this.leverAngle > 0.4) { this.fired = true; this.t = 0; if (this.onTrigger) this.onTrigger(this); }
     if (this.fired) {
       this.t += dt;
       const k = Math.min(1, this.t * 1.5);
@@ -97,7 +123,7 @@ export class Checkpoint {
     this.sign.material.emissive = this.done ? new THREE.Color('#000') : new THREE.Color('#332200');
   }
   reset() {
-    this.paddle.reset();
+    this.leverAngle = 0; if (this.paddleMesh) this.paddleMesh.rotation.x = 0;
     this.fired = false; this.t = 0;
     if (this.swing) this.swing.rotation.x = 0;
     if (this.flag) this.flag.position.y = 0.6;
@@ -106,5 +132,5 @@ export class Checkpoint {
     if (this.knob) this.knob.position.y = 0.5;
     if (this.lamp) this.lamp.material.emissiveIntensity = 0.2;
   }
-  dispose() { this.paddle.dispose(); this.scene.remove(this.toy, this.paddleMesh); }
+  dispose() { this.scene.remove(this.toy, this.paddleMesh, this.leverBase); }
 }

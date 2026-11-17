@@ -63,6 +63,11 @@ export const PARTS = {
     desc: (lv) => `おもちゃの列車が倉庫と最前線を往復し一度に${20 * (lv + 1)}個を運ぶ`,
   },
 
+  footbridge: {
+    name: '歩道橋', icon: '🪜', category: 'logistics', rarity: 'rare', max: 4, stages: [1, 2], minLevel: 3,
+    desc: (lv) => `人がドミノの列を上から越える橋（${lv}→${lv + 1}本）。「配置」で列をまたぐように置くと、遠回りが減って事故も減る`,
+  },
+
   // ---------- 防衛（ストッパーズ） ----------
   stopperCrew: {
     name: 'ストッパー設置係', icon: '🦺', category: 'defense', rarity: 'rare', max: 4, stages: [1, 2], minLevel: 3,

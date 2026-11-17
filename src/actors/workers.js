@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { PathFollower } from '../game/nav.js';
 import { CFG } from '../config.js';
 import { buildGnome, looseMats } from './gnomeModel.js';
 
@@ -412,16 +413,40 @@ export class Gnome {
     switch (this.state) {
       case 'walk': {
         const tgt = this.targetFn();
-        const dx = tgt.x - this.pos.x, dz = tgt.z - this.pos.z;
+        let dx = tgt.x - this.pos.x, dz = tgt.z - this.pos.z;
         const d = Math.hypot(dx, dz);
         const step = CFG.walkSpeed * this.speed * (this.runMult || 1) * dt;
         if (d <= Math.max(0.08, step)) {
           this.pos.x = tgt.x; this.pos.z = tgt.z;
           const cb = this.onArrive; this.onArrive = null; this.runMult = 1;
-          cb();
+          if (this.pf) this.pf.reset();
+          if (cb) cb(); else this.state = 'idle';
         } else {
-          this.pos.x += (dx / d) * step; this.pos.z += (dz / d) * step;
-          this.turnTo(Math.atan2(dx, dz), dt);
+          // ドミノの列・家具をよけて歩く（目的地のすぐ近くだけ直進）
+          let sx = dx, sz = dz, sd = d;
+          this.direct = false;
+          if (g.nav && d > 1.5) {
+            this.pf ||= new PathFollower(0);
+            const wp = this.pf.next(g.nav, this.pos, tgt, g.time);
+            if (wp) { sx = wp.x - this.pos.x; sz = wp.z - this.pos.z; sd = Math.hypot(sx, sz) || 1; }
+            else this.direct = this.pf.fail > 2; // どうしても道がない：まっすぐ（ぶつかる危険あり）
+            if (!wp && !this.direct) { this.pose = 'idle'; break; }
+          }
+          // ドミノの列をまたいでいる：そろそろ歩き、ときどき足が当たって倒してしまう（歩道橋があれば安全）
+          const ck = g.nav ? g.nav.idx(this.pos.x, this.pos.z) : -1;
+          const crossing = g.nav && g.nav.isCrossing(ck);
+          if (crossing && !this.wasCrossing) {
+            g.stats.crossings = (g.stats.crossings || 0) + 1;
+            const risk = 0.1 * (g.level('boots') ? 0.7 : 1) * (1 - 0.25 * g.level('level'));
+            if (Math.random() < risk) { g.stats.crossingBumps = (g.stats.crossingBumps || 0) + 1; this.crossBump = true; }
+          }
+          this.wasCrossing = crossing;
+          if (crossing && this.crossBump) { g.bumpDominoes(this, sx / sd, sz / sd, true); }
+          if (!crossing) this.crossBump = false;
+          const st = Math.min(step * (crossing ? 0.4 : 1), sd);
+          this.pos.x += (sx / sd) * st; this.pos.z += (sz / sd) * st;
+          if (this.direct) g.bumpDominoes && g.bumpDominoes(this, sx / sd, sz / sd);
+          this.turnTo(Math.atan2(sx, sz), dt);
           this.walking = true;
           this.pose = this.load > 0 ? 'carry' : (this.runMult > 1.2 ? 'run' : 'walk');
           const tripMul = g.level('boots') > 0 ? 0.6 : 1;
@@ -448,6 +473,7 @@ export class Gnome {
         this.timer -= dt;
         const sp = CFG.walkSpeed * 1.9 * dt;
         this.pos.x += this.fleeDir.x * sp; this.pos.z += this.fleeDir.z * sp;
+        if (g.bumpDominoes) g.bumpDominoes(this, this.fleeDir.x, this.fleeDir.z); // 慌てて逃げるとぶつかることも
         g.clampToStage(this.pos);
         this.turnTo(Math.atan2(this.fleeDir.x, this.fleeDir.z), dt * 2);
         this.walking = true;
@@ -455,7 +481,8 @@ export class Gnome {
         break;
       }
     }
-    this.pos.y = g.stage.heightAt(this.pos.x, this.pos.z);
+    // 床の高さ（歩道橋の上ならその高さ）
+    this.pos.y = Math.max(g.stage.heightAt(this.pos.x, this.pos.z), g.bridgeHeight ? g.bridgeHeight(this.pos.x, this.pos.z) : 0);
     this.animate(dt);
   }
 

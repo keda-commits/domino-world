@@ -324,6 +324,34 @@ export class Stopper {
 }
 
 // ======================= 小物：バリケード・センサー・ベル・宝箱・ガチャマシン・印・塔・本部 =======================
+/** 歩道橋：長さ L のアーチ状の木の橋（両端に階段、手すり付き）。ドミノの列の上をまたぐ */
+export function footbridgeMesh(L = 7.5, H = 2.0) {
+  const g = new THREE.Group();
+  const wood = MAT.wood('#c9935a'), rail = MAT.plastic('#2f9e44');
+  const n = 14;
+  for (let i = 0; i < n; i++) {
+    const t0 = i / n, t1 = (i + 1) / n, tm = (t0 + t1) / 2;
+    const x0 = -L / 2 + t0 * L, x1 = -L / 2 + t1 * L;
+    const y0 = Math.sin(t0 * Math.PI) * H, y1 = Math.sin(t1 * Math.PI) * H;
+    const len = Math.hypot(x1 - x0, y1 - y0);
+    const plank = mesh(rbox(len + 0.04, 0.12, 1.3, 0.03), wood, (x0 + x1) / 2, (y0 + y1) / 2, 0);
+    plank.rotation.z = Math.atan2(y1 - y0, x1 - x0);
+    g.add(plank);
+    // 段（端の方は階段）
+    if (tm < 0.25 || tm > 0.75) g.add(mesh(rbox(0.06, 0.06, 1.3, 0.02), MAT.wood('#8a5a30'), (x0 + x1) / 2, (y0 + y1) / 2 + 0.08, 0));
+    // 手すりの柱
+    if (i % 2 === 0) for (const sz of [-0.62, 0.62]) g.add(mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.7, 6), rail, x0, y0 + 0.35, sz));
+  }
+  for (const sz of [-0.62, 0.62]) for (let i = 0; i < n; i++) {
+    const t0 = i / n, t1 = (i + 1) / n;
+    const x0 = -L / 2 + t0 * L, x1 = -L / 2 + t1 * L, y0 = Math.sin(t0 * Math.PI) * H + 0.7, y1 = Math.sin(t1 * Math.PI) * H + 0.7;
+    const r = mesh(new THREE.CylinderGeometry(0.035, 0.035, Math.hypot(x1 - x0, y1 - y0), 6), rail, (x0 + x1) / 2, (y0 + y1) / 2, sz);
+    r.rotation.z = Math.atan2(y1 - y0, x1 - x0) - Math.PI / 2;
+    g.add(r);
+  }
+  // 中央の脚（列の外側に立つ2本は端の階段がかねる）
+  return shadow(g);
+}
 export function barricadeMesh() {
   const g = new THREE.Group();
   const leg = MAT.plastic('#ff922b');
