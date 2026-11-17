@@ -47,6 +47,8 @@
     <div id="runhud" class="hidden"><span id="rh-count">0</span><small>連鎖</small><div id="rh-prog"><i></i><b></b></div><div id="rh-rec" class="hidden">NEW RECORD！</div><div id="rh-piggy" class="hidden">🐷 <b>0</b></div></div>
     <div id="run-view" class="hidden"><button data-rv="chase" class="on">🎥 連鎖追跡</button><button data-rv="overview">🗺 俯瞰</button></div>
     <div id="hover-tip" class="hidden"></div>
+    <div id="follow-chip" class="hidden"></div>
+    <button id="b-restart">↺ 最初から並べ直す<small>倒れたドミノを全部資材箱に戻します</small></button>
 
     <!-- 下：建設状況と操作 -->
     <div id="bottom" class="hud">
@@ -65,7 +67,7 @@
         <button id="b-run" class="run-btn" title="倒す！ (Enter)">▶ 倒す！</button>
         <div class="tools">
           <button id="b-tidy" class="tool" title="倒れたドミノを起こす（長押し / R）">🧹<span>片付け</span></button>
-          <button id="b-rewind" class="tool" title="ぜんまい巻き戻し">⏪<span id="rewind-sub">×0</span></button>
+          <button id="b-rewind" class="tool hidden" title="ぜんまい巻き戻し（Ver.0.5 で廃止）">⏪<span id="rewind-sub">×0</span></button>
         </div>
       </div>
       <div id="piece-pop" class="hidden"></div>

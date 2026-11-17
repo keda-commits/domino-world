@@ -122,15 +122,22 @@ export const PARTS = {
   },
   clover: {
     name: '四つ葉の加護', icon: '🍀', category: 'special', rarity: 'rare', max: 3, stages: [1, 2], minLevel: 3,
-    desc: (lv) => `ガチャの選択肢が4つになる確率 ${25 * (lv + 1)}%`,
+    // Ver.0.5：ガチャは基本2択（10%で3択）。四つ葉は「3択になる確率」を上げる（最大3択）
+    desc: (lv) => `ガチャが3択になる確率 ${10 + 15 * lv}% → ${10 + 15 * (lv + 1)}%`,
   },
   piggy: {
     name: '欲張り貯金箱', icon: '🐷', category: 'special', rarity: 'epic', max: 1, stages: [1, 2], minLevel: 5,
     desc: () => '連鎖が長いほど貯金（追加経験値）が増える。ゴール到達で全額、失敗すると半分を失う',
   },
   rewind: {
-    name: 'ぜんまい巻き戻し', icon: '⏪', category: 'special', rarity: 'common', max: 99, stages: [1, 2], minLevel: 3, consumable: true,
+    // Ver.0.5 で廃止（通常ステージには出ない。将来用に定義だけ残す）
+    name: 'ぜんまい巻き戻し', icon: '⏪', category: 'special', rarity: 'common', max: 99, stages: [], minLevel: 3, consumable: true,
     desc: () => '消費アイテム×2。連鎖失敗後、コースとギミックを倒す前の状態に一瞬で戻す',
+  },
+  xpPack: {
+    // 抽選候補が足りないときの代わりの報酬（何度でも出る）
+    name: '経験値パック', icon: '⭐', category: 'special', rarity: 'common', max: 9999, stages: [], consumable: true,
+    desc: () => '経験値 +30（次のガチャが近づく）',
   },
 };
 
@@ -155,7 +162,8 @@ export const EVOLUTIONS = {
 };
 
 export const GACHA = {
-  choices: 3,
+  choices: 2, // 基本2択
+  threeChance: 0.1, // 10% で3択
   // 序盤の保証：建設・回収の最低限の能力をガチャ運に依存させない
   guarantees: [
     { level: 2, id: 'builder', when: (p) => (p.builder || 0) === 0 },

@@ -20,6 +20,7 @@ export class UI {
     document.querySelectorAll('[data-rv]').forEach((b) => (b.onclick = () => h.setRunView(b.dataset.rv)));
     $('b-run').onclick = () => h.run();
     $('b-rewind').onclick = () => h.rewind();
+    $('b-restart').onclick = () => h.earlyRestart();
     const tidy = $('b-tidy');
     tidy.onpointerdown = (e) => { e.preventDefault(); h.tidyHold(true); };
     ['pointerup', 'pointerleave', 'pointercancel'].forEach((ev) => tidy.addEventListener(ev, () => h.tidyHold(false)));
@@ -53,6 +54,7 @@ export class UI {
   setPaused(p) { $('b-pause').textContent = p ? '▶' : '⏸'; $('b-pause').classList.toggle('on', p); }
   setSpeed(s) { document.querySelectorAll('[data-speed]').forEach((b) => b.classList.toggle('on', +b.dataset.speed === s)); }
   setView(v) { document.querySelectorAll('[data-view]').forEach((b) => b.classList.toggle('on', b.dataset.view === v)); }
+  setFollow(label) { const el = $('follow-chip'); el.classList.toggle('hidden', !label); if (label) el.textContent = `📷 ${label}を追いかけ中（ドラッグ・WASDで解除）`; }
   setRunView(v) { document.querySelectorAll('[data-rv]').forEach((b) => b.classList.toggle('on', b.dataset.rv === v)); }
 
   // ---------------- 定期更新 ----------------
@@ -104,6 +106,7 @@ export class UI {
     $('b-tidy').disabled = !building;
     $('b-rewind').disabled = !building || g.rewinds <= 0 || !g.snapshot;
     $('rewind-sub').textContent = `×${g.rewinds}`;
+    $('b-restart').classList.toggle('show', building && !g.gachaActive && g.canEarlyRestart());
     // 連鎖中
     const run = g.run;
     document.body.classList.toggle('mode-run', !!run && run.kind === 'main');

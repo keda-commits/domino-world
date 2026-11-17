@@ -40,16 +40,29 @@ export class CameraRig {
     this._v = new THREE.Vector3(); this._f = new THREE.Vector3(); this._r = new THREE.Vector3();
     this._ray = new THREE.Raycaster(); this._plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
     this.smoothFront = null;
-    c.addEventListener('start', () => { this.fly = null; });
+    c.addEventListener('start', () => { this.fly = null; this.stopFollow(); });
     dom.addEventListener('wheel', () => { if (!this.inputBlocked()) this.fly = null; }, { passive: true });
   }
 
+  /** クリックした人・敵・設備にカメラを近づけて追いかける（手でカメラを動かすと解除） */
+  follow(getPos, label, dist = 9) {
+    if (this.inputBlocked()) return;
+    const p = getPos();
+    if (!p) return;
+    this.track = { getPos, label };
+    const off = this.camera.position.clone().sub(this.controls.target);
+    const az = Math.atan2(off.x, off.z), polar = 0.95;
+    const tgt = p.clone().setY(0.6);
+    this.flyTo(new THREE.Vector3(tgt.x + Math.sin(az) * Math.sin(polar) * dist, tgt.y + Math.cos(polar) * dist, tgt.z + Math.cos(az) * Math.sin(polar) * dist), tgt, 0.8);
+    this.emit();
+  }
+  stopFollow() { if (this.track) { this.track = null; this.emit(); } }
   onChange(fn) { this.listeners.push(fn); }
   emit() { this.listeners.forEach((f) => f()); }
   inputBlocked() { return this.locked || this.runLock; }
 
   // ---------- キー ----------
-  keyDown(code) { const k = KEY_CODES[code]; if (!k || this.inputBlocked()) return false; this.keys.add(k); return true; }
+  keyDown(code) { const k = KEY_CODES[code]; if (!k || this.inputBlocked()) return false; this.keys.add(k); this.stopFollow(); return true; }
   keyUp(code) { const k = KEY_CODES[code]; if (k) this.keys.delete(k); return !!k; }
   isMoveKey(code) { return !!KEY_CODES[code]; }
   /** 入力状態をすべて破棄（blur・タブ切り替え・モード遷移など） */
@@ -78,6 +91,7 @@ export class CameraRig {
     this.fly = null;
     // 地平線に近い遠い点はつかまない（わずかなマウス移動で大きく飛ぶため）→ 画面基準の移動にする
     const anchor = p && p.distanceTo(this.camera.position) < dist * 2.2 ? p.clone() : null;
+    this.stopFollow();
     this.pan = { anchor, last: ndc.clone(), dist };
     return true;
   }
@@ -125,6 +139,7 @@ export class CameraRig {
 
   /** 視点ボタン（建設中） */
   setView(name, ctx) {
+    this.stopFollow();
     if (this.runLock) { this.runView = name === 'overview' ? 'overview' : 'chase'; this.view = name; this.emit(); return; }
     if (name === 'build') this.orbitView(ctx.buildFocus || ctx.center, 30, 0.85);
     if (name === 'view') {
@@ -141,7 +156,7 @@ export class CameraRig {
   /** 進行中の移動をすぐに終点へ */
   finishFly() { const f = this.fly; if (!f) return; this.camera.position.copy(f.p1); this.controls.target.copy(f.t1); this.fly = null; this.controls.update(); }
 
-  startRun() { this.clearInput(); this.runLock = true; this.runView = 'chase'; this.view = 'chain'; this.smoothFront = null; this.chaseSide = null; this.controls.enabled = false; this.fly = null; this.emit(); }
+  startRun() { this.stopFollow(); this.clearInput(); this.runLock = true; this.runView = 'chase'; this.view = 'chain'; this.smoothFront = null; this.chaseSide = null; this.controls.enabled = false; this.fly = null; this.emit(); }
   endRun() { this.runLock = false; this.controls.enabled = true; this.clearInput(); this.emit(); }
 
   update(rawDt, ctx) {
@@ -156,6 +171,13 @@ export class CameraRig {
       if (f.t >= 1) this.fly = null;
     } else if (this.runLock && !this.locked) {
       this.runCamera(dt, ctx);
+    } else if (this.track && !this.locked) {
+      const p = this.track.getPos();
+      if (!p) this.stopFollow();
+      else {
+        const d = this._v.set(p.x, 0.6, p.z).sub(c.target).multiplyScalar(Math.min(1, dt * 4));
+        c.target.add(d); this.camera.position.add(d);
+      }
     }
     // WASD：画面基準の平行移動
     if (this.keys.size && !this.inputBlocked()) {

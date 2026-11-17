@@ -11,6 +11,7 @@ import { GachaShow } from './render/gachaShow.js';
 import { loadSave, writeSave, clearSave, loadSettings, writeSettings, loadBackup } from './save.js';
 import { installDebug } from './debug.js';
 import { Hand } from './game/hand.js';
+import { PARTS } from './data/parts.js';
 import { describeAt } from './ui/hover.js';
 
 await initPhysics();
@@ -128,6 +129,7 @@ const ui = new UI(game, {
   onPanel: () => resetAllInput(),
   run: () => runNow(),
   rewind: () => { audio.ensure(); if (game.rewind()) toast(`⏪ 倒す前に戻った！（残り${game.rewinds}）`); },
+  earlyRestart: () => { audio.ensure(); game.earlyRestart(); updateCtx(); rig.focusOn(game.crate.pos.clone(), 22, 0.8); save(); },
   tidyHold: (v) => { audio.ensure(); tidyHeld = v; },
   togglePause: () => setPaused(!paused),
   save: (m) => save(m),
@@ -147,6 +149,7 @@ const ui = new UI(game, {
   gachaSkip: () => gacha.skip(),
 });
 ui.setSpeed(speed);
+rig.onChange(() => ui.setFollow(rig.track ? rig.track.label : null));
 
 function setPaused(p) { paused = p; ui.setPaused(p); }
 function setTool(t) {
@@ -178,7 +181,7 @@ game.on('goal', () => { game.workers.list.forEach((w) => w.act(3 + Math.random()
 game.on('runEnd', (r) => {
   audio.setSong('build');
   rig.endRun(); resetAllInput(); frontBeacon.visible = false;
-  if (r.cleared) audio.goal(); else audio.fail();
+  if (r.cleared) audio.grandClear(); else audio.success(); // 途中まででも成果。失敗音は鳴らさない
   if (!r.cleared && r.stop) rig.focusOn(new THREE.Vector3(r.stop.x, 0, r.stop.z), 16, 1.0);
   ui.flash(r, () => startGacha(r));
   save();
@@ -195,7 +198,12 @@ function startGacha(r = null) {
   resetAllInput();
   game.gachaActive = true;
   audio.setSong('build');
-  gacha.start(() => { game.gachaActive = false; postGacha(r); });
+  gacha.start(() => {
+    game.gachaActive = false;
+    const w = game.firstPickWorker; game.firstPickWorker = null;
+    if (w && w.grabEntry) { followEntry(w.grabEntry); fx.floatObj(w.root, '倒れたドミノ、拾ってきます！', 'coin', 2.4); }
+    postGacha(r);
+  });
 }
 function postGacha(r) {
   save();
@@ -284,7 +292,7 @@ canvas.addEventListener('pointermove', (ev) => {
     }
   }
   if (input.state === 'panning') { rig.panMove(ndc); canvas.style.cursor = 'move'; }
-  if (input.state === 'grabbing') { canvas.style.cursor = 'grabbing'; hoverHeld(); }
+  if (input.state === 'grabbing') { canvas.style.cursor = 'grabbing'; ui.hideHover(); hand.highlight(null); } // つかんでいる間は説明を出さない（つかんだ物を見やすく）
   else if (input.state === 'idle') hoverAt(ev);
   else ui.hideHover();
 });
@@ -300,10 +308,12 @@ function finishPress(ev) {
     if (dbl) {
       input.lastClick = null;
       if (lc.hit && lc.hit.type === 'domino') hand.flick(lc.hit.d, lc.hit.point); // ドミノ上：デコピン
-      else if (!h && !lc.hit) { const p = floorPoint(ev); if (p) rig.focusOn(p, null, 0.6); } // 何もない所：注目（物の上では注目しない）
+      else if (!h && !lc.hit) { const p = floorPoint(ev); if (p) { rig.stopFollow(); const dist = camera.position.distanceTo(rig.controls.target); rig.focusOn(p, Math.max(6, dist * 0.55), 0.6); } } // 何もない床：その地点へ近づく
     } else {
       input.lastClick = { t: now, x: ev.clientX, y: ev.clientY, hit: h };
       if (tool !== 'play') toolClick(ev);
+      else if (h && h.type === 'entry') followEntry(h.entry); // 人・敵・設備をクリック：近づいて追いかける
+      else if (!h) { const ro = followableAt(ev); if (ro) rig.follow(ro.get, ro.label); }
     }
   }
   endInput();
@@ -319,6 +329,18 @@ canvas.addEventListener('wheel', (ev) => {
 }, { passive: false, capture: true });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
+/** 追従できる（つかめないけれど動くもの）：ルンバ */
+function followableAt(ev) {
+  setNdc(ev); ray.setFromCamera(ndc, camera);
+  const r = game.roomba;
+  if (r && ray.intersectObject(r.group, true).length) return { get: () => r.pos.clone(), label: 'ルンバ' };
+  return null;
+}
+function followEntry(e) {
+  const w = e.kind === 'worker' ? game.workers.list.find((x) => x.root === e.obj) : null;
+  const label = w ? (PARTS[w.role] ? PARTS[w.role].name : '人') : e.name;
+  rig.follow(() => (e.obj && e.obj.parent ? e.getPos() : null), label, e.kind === 'worker' || e.kind === 'threat' ? 7 : 12);
+}
 /** 置く以外の道具のクリック */
 function toolClick(ev) {
   const p = floorPoint(ev);

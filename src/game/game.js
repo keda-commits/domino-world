@@ -347,11 +347,14 @@ export class Game {
 
   /** ガチャで選んだパーツを反映し、現場に登場したもの（人・設備）を記録する */
   onGachaPick(p) {
+    const wasFirst = !this.progress.firstGachaDone;
     const before = new Set(this.workers.list);
     const res = this.progress.take(p);
     if (p.id === 'rewind') this.rewinds += 2;
     this.syncPartsToWorld(true);
     this.lastSpawned = this.workers.list.filter((w) => !before.has(w));
+    // 最初のガチャで回収担当：そのまま倒れたドミノを拾いに行く様子をカメラで追う
+    this.firstPickWorker = wasFirst && p.id === 'collector' ? this.lastSpawned[0] || null : null;
     const id = p.evo || p.id;
     const firstOf = (role) => { const w = this.workers.list.find((x) => x.role === role); return w ? w.pos.clone() : null; };
     const T = {
@@ -1142,7 +1145,53 @@ export class Game {
       if ((t.x - r.pos.x) ** 2 + (t.z - r.pos.z) ** 2 < (r.r + 1.6) ** 2) { d.byRoomba = true; this.stats.roombaKnocks++; }
     }
     if (this.mode === 'run' || this.mode === 'test') this.runTopple(d);
-    else if (d.slot) { d.accident = true; this.onAccidentTopple(d); }
+    else if (d.slot) { d.accident = true; this.onAccidentTopple(d); this.countAccident(d); }
+  }
+
+  /** 建設中の事故：倒れた枚数を数え、連鎖が止まってから観客の反応（倒れている最中はドミノの音を優先） */
+  countAccident(d) {
+    const ep = (this.accEp ||= { n: 0, last: 0, x: 0, z: 0 });
+    if (!ep.n) { const t = d.body.translation(); ep.x = t.x; ep.z = t.z; }
+    ep.n++; ep.last = this.time;
+  }
+  updateAccidentReaction() {
+    const ep = this.accEp;
+    if (!ep || !ep.n || this.time - ep.last < 1.3) return;
+    const n = ep.n; ep.n = 0;
+    if (this.mode !== 'build' || n < 3 || this.time - (this._crowdT || -99) < 8) return;
+    this._crowdT = this.time;
+    this.audio.crowdAww(n);
+    this.stats.accidentReactions = (this.stats.accidentReactions || 0) + 1;
+    this.fx.floatAt(tmp.set(ep.x, 2.4, ep.z), n >= 40 ? '😱 ブー！ 大事故…' : 'おぉ〜……あぁ〜……', 'warn', 1.8);
+    this.emit('accident', n);
+  }
+
+  // ================= 序盤のやり直し =================
+  /** 最初のガチャを選ぶまでの間で、倒れた・散らばったドミノがあるとき */
+  canEarlyRestart() {
+    if (this.progress.firstGachaDone || this.mode !== 'build' || this.run) return false;
+    for (const d of this.dominoes.list) if (!d.held && (d.toppled || !d.slot || !this.dominoes.isStandingAt(d, d.slot))) return true;
+    return false;
+  }
+  /**
+   * 「↺ 最初から並べ直す」：置いたドミノを全部資材箱に戻す（セーブ・記録・設定はそのまま）
+   * 枚数は増減しない：ワールドのドミノ＋人が持っている分を、すべて資材箱へ
+   */
+  earlyRestart() {
+    if (this.progress.firstGachaDone || this.mode !== 'build') return 0;
+    if (this.hand) this.hand.cancel();
+    let n = 0;
+    for (const d of [...this.dominoes.list]) { if (d.slot && d.slot.domino === d) d.slot.domino = null; this.dominoes.remove(d); n++; }
+    for (const w of this.workers.list) { n += w.load; w.load = 0; w.releaseJob(); }
+    for (const s of this.course.allSlots) s.claim = 0;
+    this.crate.count += n;
+    this.unbuiltDirty = true;
+    for (const cp of this.checkpoints) cp.reset();
+    this.stats.earlyRestarts = (this.stats.earlyRestarts || 0) + 1;
+    this.audio.rewind();
+    this.fx.floatAt(this.crate.pos.clone().setY(2.4), `↺ ${n}枚を資材箱に戻しました`, 'coin', 2);
+    this.emit('earlyRestart', n);
+    return n;
   }
 
   // ================= 本番の連鎖 =================
@@ -1553,6 +1602,7 @@ export class Game {
     if (this.roomba) this.roomba.update(dt, this);
     for (const th of this.threats || []) th.update(dt);
     this.updateTutorial();
+    this.updateAccidentReaction();
     this.updateThrows(dt);
     this.updateAlarm(dt);
     this.workers.update(dt);

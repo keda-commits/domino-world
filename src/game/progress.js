@@ -51,17 +51,20 @@ export class Progress {
 
   /** 選択肢を作る。rand: 0..1 の乱数関数 */
   offer(stage, ticket, rand = Math.random) {
-    let n = ticket.choices || GACHA.choices;
+    // Ver.0.5：基本2択、10% で3択（四つ葉の加護で確率アップ・四つ葉ドミノで次は確定3択）。最大3択
     const clover = this.lv('clover');
-    if (clover && rand() < 0.25 * (clover + 1)) n = Math.max(n, 4);
-    if (this.extraChoice) { n = Math.max(n, 3 + this.extraChoice); this.extraChoice = 0; }
+    let n = rand() < GACHA.threeChance + 0.15 * clover ? 3 : GACHA.choices;
+    if (this.extraChoice) { n = 3; this.extraChoice = 0; }
     const picks = [];
+    // 最初のガチャ：回収担当を必ず候補に（おすすめ）。倒れたドミノを拾ってくれるので並べ直しが楽になる
+    const first = !this.firstGachaDone;
+    if (first && PARTS.collector.stages.includes(stage) && this.lv('collector') < PARTS.collector.max) picks.push({ id: 'collector', guaranteed: true, reason: 'おすすめ！ 倒れたドミノを拾ってくれるので、並べ直しが楽になります' });
     // 確実に出す選択肢（防衛チュートリアルのストッパーズなど）
-    for (const id of ticket.force || []) if (PARTS[id] && this.lv(id) < PARTS[id].max) picks.push({ id, guaranteed: true });
+    for (const id of ticket.force || []) if (PARTS[id] && this.lv(id) < PARTS[id].max && !picks.some((p) => p.id === id)) picks.push({ id, guaranteed: true });
     // 合体設計図（進化）は条件を満たしたら優先して出す
     if (!ticket.category) for (const ev of this.readyEvolutions()) if (picks.length < 1) picks.push({ evo: ev });
     // 序盤の保証
-    if (!ticket.category) for (const gu of GACHA.guarantees) {
+    if (!ticket.category && !first) for (const gu of GACHA.guarantees) {
       if (this.level >= gu.level && gu.when(this.parts) && PARTS[gu.id].stages.includes(stage) && !picks.some((p) => p.id === gu.id)) { picks.push({ id: gu.id, guaranteed: true }); break; }
     }
     const pool = this.eligible(stage, ticket).filter((id) => !picks.some((p) => p.id === id));
@@ -74,30 +77,38 @@ export class Progress {
       return w;
     };
     while (picks.length < n && pool.length) {
-      const tot = pool.reduce((a, id) => a + weight(id), 0);
+      // 2択に意味があるよう、すでに並んでいるものと同じ種類は出にくくする
+      const cats = new Set(picks.map((p) => p.id && PARTS[p.id] && PARTS[p.id].category));
+      const w = (id) => weight(id) * (cats.has(PARTS[id].category) ? 0.25 : 1);
+      const tot = pool.reduce((a, id) => a + w(id), 0);
       let r = rand() * tot, k = 0;
-      for (; k < pool.length - 1; k++) { r -= weight(pool[k]); if (r <= 0) break; }
+      for (; k < pool.length - 1; k++) { r -= w(pool[k]); if (r <= 0) break; }
       picks.push({ id: pool[k] });
       pool.splice(k, 1);
     }
-    // 何も出ない（全部最大）ときは巻き戻しアイテム
-    while (picks.length < Math.min(n, 3)) picks.push({ id: 'rewind' });
+    // 候補が足りない（ほとんど最大）ときは経験値パック（ぜんまい巻き戻しは廃止）
+    while (picks.length < Math.min(n, 2)) picks.push({ id: 'xpPack' });
+    if (picks.length > 3) picks.length = 3;
     this.lastOffered = new Set(picks.filter((p) => p.id).map((p) => p.id));
     return picks;
   }
 
   /** 選択を適用。返り値：{kind:'part'|'evo', id, level} */
   take(pick) {
+    this.firstGachaDone = true;
+    if (pick.id === 'xpPack') { this.addXP(30); return { kind: 'part', id: 'xpPack', level: 0 }; }
     if (pick.evo) { this.evolutions[pick.evo] = true; return { kind: 'evo', id: pick.evo }; }
     this.parts[pick.id] = this.lv(pick.id) + 1;
     return { kind: 'part', id: pick.id, level: this.parts[pick.id] };
   }
 
-  serialize() { return { level: this.level, xp: this.xp, parts: this.parts, evolutions: this.evolutions, tickets: this.tickets, extraChoice: this.extraChoice }; }
+  serialize() { return { level: this.level, xp: this.xp, parts: this.parts, evolutions: this.evolutions, tickets: this.tickets, extraChoice: this.extraChoice, firstGachaDone: !!this.firstGachaDone }; }
   load(d) {
     if (!d) return;
     this.level = d.level || 1; this.xp = d.xp || 0; this.parts = d.parts || {}; this.evolutions = d.evolutions || {};
     this.tickets = d.tickets || []; this.extraChoice = d.extraChoice || 0;
+    // 既存セーブ：パーツを1つでも持っていれば最初のガチャは済んでいる
+    this.firstGachaDone = d.firstGachaDone ?? Object.values(d.parts || {}).some((v) => v > 0);
   }
 }
 
