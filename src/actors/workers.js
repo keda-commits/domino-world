@@ -254,7 +254,18 @@ export class Gnome {
       this.face(slot);
       // マスの上に仲間が立っている：置くとぶつかるので、どくまで待つ
       const blocker = g.workers.list.find((o) => o !== this && o.state !== 'held' && Math.hypot(o.pos.x - slot.x, o.pos.z - slot.z) < CFG.gnomeR + 0.42);
-      if (blocker) { if (!this._waitSay || g.time - this._waitSay > 6) { this._waitSay = g.time; this.say('ちょっとどいて〜'); } this.releaseJob(); return this.act(0.5, 'idle', () => this.think()); }
+      if (blocker) {
+        if (!this._waitSay || g.time - this._waitSay > 6) { this._waitSay = g.time; this.say('ちょっとどいて〜'); }
+        // どいてもらう：立ち止まっている・休んでいる・立ち往生している人は、列の横へ一歩よける
+        if (!blocker.haul && !blocker.forcing && blocker.state !== 'trip' && blocker.state !== 'hauled' && (blocker.state === 'act' || (blocker.stuckT || 0) > 0.3 || !blocker.walking)) {
+          const away = Math.sign((blocker.pos.x - slot.x) * Math.cos(slot.yaw) - (blocker.pos.z - slot.z) * Math.sin(slot.yaw)) || 1;
+          const p = g.sideOf(slot, away * 1.5, new THREE.Vector3());
+          if (blocker.life && g.campLife) g.campLife.leave(blocker);
+          blocker.releaseJob(); blocker.say('あっ、ごめん！');
+          blocker.goto(() => p, () => blocker.think());
+        }
+        this.releaseJob(); return this.act(0.6, 'idle', () => this.think());
+      }
       this.act(CFG.placeTime / this.speed, 'place', () => {
         this.releaseJob();
         if (slot.domino) return this.think();
@@ -680,6 +691,8 @@ export class Gnome {
               if (!ok) {
                 // 目的地がドミノのすぐそば（拾う・起こす）：手が届くのでここで着いたことにする
                 if (d < 1.0) { this.arriveDist = 0; const cb = this.onArrive; this.onArrive = null; this.runMult = 1; if (this.pf) this.pf.reset(); if (cb) cb(); else this.state = 'idle'; break; }
+                // 道はあるのに体が当たって進めない（カーブの内側などのすき間）：その所をしばらく通れないことにして引き直す
+                if ((this.stuckT || 0) > 0.8 && g.nav && (!this._softT || g.time - this._softT > 1.5)) { this._softT = g.time; g.nav.blockAt(this.pos.x + (sx / sd) * 0.45, this.pos.z + (sz / sd) * 0.45, g.time); }
                 this.stall(dt, d); if (this.pf) this.pf.reset(); break;
               }
             }

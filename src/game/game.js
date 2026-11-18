@@ -727,7 +727,9 @@ export class Game {
     if (!this.nav || !this.nav.version) return gnome.side;
     const v = (this._rsV ||= new THREE.Vector3());
     // 横のすぐそば（0.75）がふさがっていたら（倒れたドミノが横たわっている等）、少し離れた所（1.4）から
-    const base = Math.sign(gnome.side) || 1;
+    // 自分のいる側（近い方）から作業する：列の向こう側へ回りこむ遠回りをしない
+    const nx = Math.cos(slot.yaw), nz = -Math.sin(slot.yaw);
+    const base = Math.sign((gnome.pos.x - slot.x) * nx + (gnome.pos.z - slot.z) * nz) || Math.sign(gnome.side) || 1;
     for (const d of [0.75, 1.4]) for (const sd of [base * d, -base * d]) { this.sideOf(slot, sd, v); if (this.nav.reachable(gnome.pos, v, 1)) return sd; }
     return 0;
   }

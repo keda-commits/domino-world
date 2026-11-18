@@ -46,11 +46,13 @@ export class CampLife {
     if (w.role === 'collector') return [...g.dominoes.list].some((d) => d.toppled && d.slot && !d.claim);
     return false;
   }
-  /** 遊んでいる人は、仕事ができてもすぐには気づかない（仲間や設計主任に呼ばれて戻る）。20秒たてば自分で気づく */
+  /** 遊んでいる人は、仕事ができてもすぐには気づかない（仲間や設計主任に呼ばれて戻る）。しばらくたてば自分で気づく */
   workWait(w) {
     if (!this.hasWork(w)) { w._workT = 0; return false; }
     if (!w._workT) w._workT = this.game.time;
-    return this.game.time - w._workT > 20;
+    // 設計主任がいる所（ステージ2）は呼びに来てくれるので少し長め。いない所では早めに自分で気づく
+    const chief = this.game.workers.list.some((o) => o.role === 'chief');
+    return this.game.time - w._workT > (chief ? 15 : 5);
   }
   /** 遊んで（休んで）いる人か */
   isFun(w) { return !!(w.life && ['ball', 'loiter', 'seat', 'hammock'].includes(w.life.kind)); }
@@ -318,7 +320,7 @@ export class CampLife {
             const mate = g.workers.list.find((o) => o !== s && o.life?.v === v && (o.life.kind === 'loiter' || o.life.kind === 'seat' || o.life.kind === 'ball'))
               || g.workers.list.find((o) => o !== s && o.role === s.role && o.state === 'walk' && !o.haul && Math.hypot(o.pos.x - v.center.x, o.pos.z - v.center.z) < 10);
             if (mate) this.wake(v, mate);
-            else if (s.life.workT > 20) { s.say('ふぁ…あ、仕事か！'); this.leave(s); s.act(0.6, 'surprised', () => s.think()); }
+            else if (s.life.workT > 15) { s.say('ふぁ…あ、仕事か！'); this.leave(s); s.act(0.6, 'surprised', () => s.think()); }
           }
         } else s.life.workT = 0;
       }

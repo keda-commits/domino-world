@@ -95,6 +95,11 @@ export class NavGrid {
         this.dyn[j * NW + i] = 1;
       }
     }
+    // 実際に体が当たって進めなかった所（急なカーブの内側など）：しばらく通れないことにして、道を引き直させる
+    if (this.soft && this.soft.length) {
+      this.soft = this.soft.filter((b) => time - b.t < 20);
+      for (const b of this.soft) for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) { const k = this.idx(b.x + dx * CELL, b.z + dz * CELL); if (k >= 0) this.dyn[k] = 1; }
+    }
     // 障害物からの距離（多点 BFS）
     const W = this.w, H = this.h, c = this.clear;
     const q = new Int32Array(W * H); let qh = 0, qt = 0;
@@ -116,6 +121,8 @@ export class NavGrid {
     // 行き先のまわり（倉庫のおもちゃ箱のように大きな物は、その外側）に、同じ範囲の通れるマスがあれば行ける
     return this.nearestFree(b, 0, rb, this.region[ka]) >= 0;
   }
+  /** 体が当たって進めなかった所を、しばらく通れないことにする */
+  blockAt(x, z, time) { (this.soft ||= []).push({ x, z, t: time }); if (this.soft.length > 40) this.soft.shift(); this.dynT = -1; }
   /** ドミノの列をまたいでいるマス（歩道橋の上は除く） */
   isCrossing(k) { return k >= 0 && this.dyn[k] === 1 && this.bridge[k] !== 1 && this.stat[k] === 0; }
   blockedK(k) { return this.stat[k] === 1 || (this.dyn[k] === 1 && this.bridge[k] !== 1); }
