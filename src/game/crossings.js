@@ -53,8 +53,9 @@ export class Crossings {
   makeSign(site) {
     const c = document.createElement('canvas'); c.width = 512; c.height = 160;
     const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(3.4, 1.06), new THREE.MeshStandardMaterial({ map: t, side: THREE.DoubleSide, transparent: true }));
-    const g = new THREE.Group(); g.add(m);
+    // 表裏どちらから見ても文字が正しく読めるよう、片面の板を背中合わせに2枚
+    const mat = new THREE.MeshStandardMaterial({ map: t, transparent: true }), geo = new THREE.PlaneGeometry(3.4, 1.06);
+    const g = new THREE.Group(); g.add(new THREE.Mesh(geo, mat)); const back = new THREE.Mesh(geo, mat); back.rotation.y = Math.PI; back.position.z = -0.005; g.add(back);
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 2.4, 6), MAT.metal()); pole.position.y = -1.0; g.add(pole);
     const sl = site.center, nx = Math.cos(sl.yaw), nz = -Math.sin(sl.yaw);
     g.position.set(sl.x + nx * 3.2 - Math.sin(sl.yaw) * 4.5, 2.4, sl.z + nz * 3.2 - Math.cos(sl.yaw) * 4.5);

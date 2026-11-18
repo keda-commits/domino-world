@@ -8,7 +8,7 @@ import { UI } from './ui/ui.js';
 import { CameraRig } from './render/cameraRig.js';
 import { Renderer } from './render/renderer.js';
 import { GachaShow } from './render/gachaShow.js';
-import { loadSave, writeSave, clearSave, loadSettings, writeSettings, loadBackup } from './save.js';
+import { loadSave, writeSave, clearSave, loadSettings, writeSettings, loadBackup, PREVIEW } from './save.js';
 import { installDebug } from './debug.js';
 import { Hand } from './game/hand.js';
 import { PARTS } from './data/parts.js';
@@ -58,8 +58,23 @@ function applySave(s) {
 }
 const loaded = loadSave();
 if (loaded.data && (loaded.data.v === 3 || loaded.data.v === 2)) applySave(loaded.data);
-const startStage = loaded.data && loaded.data.currentStage ? loaded.data.currentStage : 1;
+let startStage = loaded.data && loaded.data.currentStage ? loaded.data.currentStage : 1;
+// プレビュー版：?start=s2 で、ステージ1をクリアしたくらいの状態からステージ2を試せる（プレビュー用のセーブが無いときだけ）
+if (PREVIEW && !loaded.data && new URLSearchParams(location.search).get('start') === 's2') {
+  const P = game.progress;
+  P.level = 15; P.xp = 0; P.firstGachaDone = true;
+  P.parts = { builder: 4, carrier: 4, collector: 2, restorer: 2, stopperCrew: 2, soldier: 2, factory: 1, train: 1, boots: 1, level: 2, basket: 1 };
+  game.records[1] = { ...(game.records[1] || {}), best: 889, cleared: true, attempts: 1, toldStage2: true };
+  game.unlockedStage = 2; startStage = 2;
+}
 game.loadStage(startStage, stageSaves[startStage]);
+if (PREVIEW) {
+  const b = document.createElement('div');
+  b.textContent = 'プレビュー版 v0.6（開発中・本編のセーブとは別）';
+  b.style.cssText = 'position:fixed;left:50%;bottom:2px;transform:translateX(-50%);background:#c92a2a;color:#fff;font:bold 11px sans-serif;padding:2px 8px;border-radius:6px;z-index:50;pointer-events:none;opacity:.85';
+  document.body.appendChild(b);
+  document.title = '【プレビュー v0.6】' + document.title;
+}
 
 function placeGachaMachine() {
   const sp = game.def.gachaSpot;

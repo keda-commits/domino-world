@@ -332,7 +332,8 @@ export class ToyRailway {
     const c = document.createElement('canvas'); c.width = 512; c.height = 128; const x2 = c.getContext('2d');
     x2.fillStyle = '#fff'; x2.fillRect(0, 0, 512, 128); x2.fillStyle = BLUE; x2.fillRect(0, 0, 512, 22); x2.fillStyle = '#212529'; x2.font = 'bold 60px sans-serif'; x2.textAlign = 'center'; x2.fillText('ぽっぽ線 リビング駅', 256, 92);
     const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
-    const sign = new THREE.Mesh(new THREE.PlaneGeometry(4, 1), new THREE.MeshStandardMaterial({ map: t, side: THREE.DoubleSide })); sign.position.set(0, 3.2, 0.2); sign.rotation.y = Math.PI; g.add(sign);
+    const sm = new THREE.MeshStandardMaterial({ map: t }), sgeo = new THREE.PlaneGeometry(4, 1);
+    for (const [ry, dz] of [[0, 0.205], [Math.PI, 0.195]]) { const sign = new THREE.Mesh(sgeo, sm); sign.position.set(0, 3.2, dz); sign.rotation.y = ry; g.add(sign); } // 表裏とも正しく読める
     g.position.set(x, 0, z); shadow(g); this.game.scene.add(g); this.stationMesh = g;
     this.station = { s: this.track.closest({ x, z: d.z1 }).s, x, z };
     this.game.stage.obstacles.push({ x, z, hw: 5, hd: 1.1, yaw: 0, roomba: true, build: true });

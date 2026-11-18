@@ -1,7 +1,9 @@
 // localStorage セーブ。v0.3 は新しいキー。v0.2・v0.1 のセーブは読み込みはするが、消したり上書きしたりしない。
-const KEY = 'domino-world-save-v3';
-const V2 = 'domino-world-save-v2';
-const SETTINGS = 'domino-world-settings-v3';
+// プレビュー版（開発ブランチの試遊用ビルド）は別のキーに保存する：本編のセーブを読まない・書かない
+export const PREVIEW = import.meta.env.VITE_SAVE_SUFFIX || '';
+const KEY = 'domino-world-save-v3' + PREVIEW;
+const V2 = PREVIEW ? '__no_v2_in_preview__' : 'domino-world-save-v2';
+const SETTINGS = 'domino-world-settings-v3' + PREVIEW;
 const OLD_SETTINGS = 'domino-world-settings-v2';
 
 const read = (k) => { try { const s = localStorage.getItem(k); return s ? JSON.parse(s) : null; } catch { return null; } };
@@ -10,7 +12,7 @@ const read = (k) => { try { const s = localStorage.getItem(k); return s ? JSON.p
 export function loadSave() {
   const v3 = read(KEY);
   if (v3) return { data: v3, migratedFrom: null };
-  const noImport = localStorage.getItem('domino-world-v3-noimport');
+  const noImport = PREVIEW || localStorage.getItem('domino-world-v3-noimport');
   const v2 = noImport ? null : read(V2);
   if (v2) return { data: v2, migratedFrom: 'v0.2' };
   return { data: null, migratedFrom: localStorage.getItem('domino-world-save-v1') ? 'v0.1' : null };
@@ -25,6 +27,6 @@ export function writeSave(data) {
   } catch { return 0; }
 }
 export function loadBackup() { return read(KEY + '-backup'); }
-export function clearSave() { try { localStorage.removeItem(KEY); localStorage.removeItem(KEY + '-backup'); localStorage.setItem('domino-world-v3-noimport', '1'); } catch { /* noop */ } }
+export function clearSave() { try { localStorage.removeItem(KEY); localStorage.removeItem(KEY + '-backup'); if (!PREVIEW) localStorage.setItem('domino-world-v3-noimport', '1'); } catch { /* noop */ } }
 export function loadSettings() { return read(SETTINGS) || read(OLD_SETTINGS) || {}; }
 export function writeSettings(s) { try { localStorage.setItem(SETTINGS, JSON.stringify(s)); } catch { /* noop */ } }

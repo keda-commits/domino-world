@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "preview:v06": "vite build --mode preview06 --outDir dist-preview && vite preview --outDir dist-preview --port 4180 --strictPort"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "0.19.3",
