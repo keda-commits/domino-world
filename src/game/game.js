@@ -18,7 +18,10 @@ import { ToyRailway } from '../world/toyrail.js';
 import { Crossings } from './crossings.js';
 import { Grabbables, propEntry, carryEntry, addHitProxy } from './grabbables.js';
 import { NavGrid } from './nav.js';
-import { campMarker, StorageShelf, ROLE_CAMP, SMALL_PARTS } from '../world/camps.js';
+import { campVillage, StorageShelf, ROLE_CAMP, SMALL_PARTS } from '../world/camps.js';
+import { CampLife } from './campLife.js';
+import { RailPlans } from './railPlan.js';
+import { autoConnect } from './chief.js';
 import { Workers } from '../actors/workers.js';
 import { Depot, Crate, Machine, Train, Factory } from './facilities.js';
 import { PlanView } from './planView.js';
@@ -79,7 +82,13 @@ export class Game {
     // 獲得物の行き先（看板）と倉庫の棚
     const camps = this.def.camps || {};
     this.campMeshes = [];
-    for (const [k, c] of Object.entries(camps)) if (k !== 'storage') { const m = campMarker(k); m.position.set(c.x, 0, c.z); this.scene.add(m); this.campMeshes.push(m); }
+    // Ver.0.6：待機所は小人の村（家・庭・ハンモック・休憩所・遊び道具）。小人どうしの遊びや声かけは campLife が受け持つ
+    this.campLife = new CampLife(this);
+    for (const [k, c] of Object.entries(camps)) if (k !== 'storage') {
+      const vg = campVillage(k); vg.group.position.set(c.x, 0, c.z); vg.group.rotation.y = c.yaw || 0; this.scene.add(vg.group); this.campMeshes.push(vg.group);
+      for (const o of vg.obstacles) this.stage.obstacles.push({ x: c.x + o.x, z: c.z + o.z, hw: o.hw, hd: o.hd, yaw: 0, roomba: true, build: true, camp: k });
+      this.campLife.addVillage(k, new THREE.Vector3(c.x, 0, c.z), vg.spots);
+    }
     this.shelf = camps.storage ? new StorageShelf(this.scene, camps.storage) : null;
     if (camps.storage) this.stage.obstacles.push({ x: camps.storage.x, z: camps.storage.z, hw: 3.8, hd: 1.2, yaw: 0, roomba: true, build: true });
     const fs = this.def.factorySpot;
@@ -145,6 +154,8 @@ export class Game {
     this.railway = this.def.toyRail ? new ToyRailway(this, this.def.toyRail) : null;
     this.setupCheckpoints();
     this.crossings = this.railway ? new Crossings(this, this.railway) : null;
+    // Ver.0.6：ぽっぽ線の路線計画（支線を自分で延ばす）
+    this.railPlans = this.railway && this.def.toyRail.plans ? new RailPlans(this, this.railway, this.def.toyRail.plans) : null;
     if (data) this.applyStageSave(data);
     this.syncPartsToWorld(true);
     this.refreshCourse();
@@ -183,7 +194,7 @@ export class Game {
     // 資材箱：中のドミノは1枚ずつ取り出し、縁や旗をつかむと箱ごと運ぶ（運んだ場所に固定され、建設の先頭を追わなくなる）
     this.crateEntry = G.add(carryEntry(this, { name: '前線の資材箱', kind: 'facility', obj: this.crate.group, radius: 1.5, height: 1.0, canGrab: notRun, foot: { hw: 1.2, hd: 0.9 }, ownBody: true,
       getPos: () => this.crate.pos.clone(), setPos: (v) => this.crate.pos.copy(v),
-      onGrab: () => { this.crate.carried = true; this.crate.pinned = true; }, onDrop: () => { this.crate.carried = false; this.crate.pos.y = this.stage.heightAt(this.crate.pos.x, this.crate.pos.z); this.navDirty = true; } }));
+      onGrab: () => { this.crate.carried = true; this.crate.pinned = true; }, onDrop: () => { this.crate.carried = false; this.crate.pinT = this.time; this.crate.pos.y = this.stage.heightAt(this.crate.pos.x, this.crate.pos.z); this.navDirty = true; } }));
     G.add(carryEntry(this, { name: 'ドミノ自動設置機', kind: 'facility', obj: this.machine.group, radius: 1.6, height: 2.6, canGrab: () => notRun() && this.machineActive() && this.level('machine') > 0,
       getPos: () => this.machine.pos.clone(), setPos: (v) => this.machine.pos.copy(v), onGrab: () => { this.machine.carried = true; }, onDrop: () => { this.machine.carried = false; } }));
     this.trainEntry = G.add(carryEntry(this, { name: '資材運搬トレイン', kind: 'facility', obj: this.train.mesh, radius: 1.6, height: 1.6, canGrab: () => notRun() && this.level('train') > 0,
@@ -206,19 +217,43 @@ export class Game {
     if (this.piggy) this.addPiggyGrab();
   }
   /** 人がドミノにぶつかった（逃げている・道がなくて直進したとき）：物理的に押して倒す */
-  bumpDominoes(w, dx, dz, sideways = false) {
-    if (this.mode !== 'build') return;
-    for (const d of this.dominoes.near(w.pos.x, w.pos.z)) {
-      if (d.toppled || d.held || d.bumpedBy === w.id) continue;
+  /**
+   * Ver.0.6：小人の体（半径 gnomeR の球を足元から3段）とドミノ（実際の箱の形・向き）の重なり。
+   * 返り値は一番深いめり込み量（0＝当たっていない）。out を渡すと当たっているドミノを集める
+   */
+  bodyContact(x, z, y = 0, out = null) {
+    const R = CFG.gnomeR, hw = CFG.dominoW / 2, hh = CFG.dominoH / 2, ht = CFG.dominoT / 2;
+    let depth = 0;
+    for (const d of this.dominoes.near(x, z)) {
+      if (d.held || d.removed) continue;
       const t = d.body.translation();
-      if ((t.x - w.pos.x) ** 2 + (t.z - w.pos.z) ** 2 > 0.38 * 0.38) continue;
-      d.bumpedBy = w.id;
-      // またいでいて足が当たった：列の横向きに倒れる（1枚だけ。連鎖にはならない）
-      if (sideways && d.slot) { const nx = Math.cos(d.slot.yaw), nz = -Math.sin(d.slot.yaw); const sg = nx * dx + nz * dz >= 0 ? 1 : -1; this.dominoes.push(d, nx * sg, nz * sg, 0.1); }
-      else this.dominoes.push(d, dx, dz, 0.05);
-      this.stats.workerBumps = (this.stats.workerBumps || 0) + 1;
-      if (!w._bumpSay || this.time - w._bumpSay > 3) { w._bumpSay = this.time; w.say('あっ、ぶつかった！', 'warn'); }
+      if (t.y - y > 1.4 || t.y - y < -0.6 || (t.x - x) ** 2 + (t.z - z) ** 2 > 1.1) continue;
+      const q = d.body.rotation(), qx = -q.x, qy = -q.y, qz = -q.z, qw = q.w; // 逆回転でドミノの局所座標へ
+      for (const hgt of [0.2, 0.42, 0.64]) {
+        const vx = x - t.x, vy = y + hgt - t.y, vz = z - t.z;
+        const tx = 2 * (qy * vz - qz * vy), ty = 2 * (qz * vx - qx * vz), tz = 2 * (qx * vy - qy * vx);
+        const lx = vx + qw * tx + (qy * tz - qz * ty), ly = vy + qw * ty + (qz * tx - qx * tz), lz = vz + qw * tz + (qx * ty - qy * tx);
+        const cx = Math.max(-hw, Math.min(hw, lx)), cy = Math.max(-hh, Math.min(hh, ly)), cz = Math.max(-ht, Math.min(ht, lz));
+        const dd = Math.hypot(lx - cx, ly - cy, lz - cz);
+        if (dd < R) { if (R - dd > depth) depth = R - dd; if (out && !out.includes(d)) out.push(d); }
+      }
     }
+    return depth;
+  }
+  /** 小人の体が当たっているドミノを、進む向きに押す（めり込んだ分だけの力。倒れるかどうかは物理しだい。確率は使わない） */
+  pushByBody(w, dx, dz, dt) {
+    const hits = [];
+    const depth = this.bodyContact(w.pos.x + dx * 0.06, w.pos.z + dz * 0.06, w.pos.y, hits);
+    if (!hits.length) return;
+    for (const d of hits) {
+      if (d.frozen) this.dominoes.unfreeze(d);
+      const t = d.body.translation();
+      const J = Math.min(0.07, 14 * Math.max(depth, 0.03) * dt); // 体重をかけて押す力（めり込みが深いほど強い）
+      d.body.wakeUp();
+      d.body.applyImpulseAtPoint({ x: dx * J, y: 0, z: dz * J }, { x: t.x, y: w.pos.y + 0.62, z: t.z }, true); // 肩の高さ（ドミノの重心より上）で押す
+      if (!d._bodyHit || this.time - d._bodyHit > 1) { d._bodyHit = this.time; this.stats.workerBumps = (this.stats.workerBumps || 0) + 1; }
+    }
+    if (!w._bumpSay || this.time - w._bumpSay > 3) { w._bumpSay = this.time; w.say('あっ、ぶつかった！', 'warn'); }
   }
   /** 歩道橋の上なら、その高さ（橋の中央が一番高いアーチ） */
   bridgeHeight(x, z) {
@@ -291,9 +326,9 @@ export class Game {
   /** 小物・資材箱・製造機の位置と、資材箱の中身を保存 */
   serializeGrab() {
     return {
-      layout: MAP_LAYOUT,
+      layout: this.def.mapLayout || MAP_LAYOUT,
       props: (this.propEntries || []).map((e) => e.serialize()),
-      crate: { n: this.crate.count, x: +this.crate.pos.x.toFixed(2), z: +this.crate.pos.z.toFixed(2), pinned: !!this.crate.pinned, refill: 2 },
+      crate: { n: this.crate.count, x: +this.crate.pos.x.toFixed(2), z: +this.crate.pos.z.toFixed(2), yaw: +this.crate.group.rotation.y.toFixed(3), pinned: !!this.crate.pinned, refill: 2, stay: 1, ho: this.crate.haulOrder ?? -1 },
       factory: [+this.factory.group.position.x.toFixed(2), +this.factory.group.position.z.toFixed(2)],
     };
   }
@@ -301,10 +336,14 @@ export class Game {
     const moved = d.grab;
     if (!moved) return;
     // Ver.0.5：部屋を広げた（家具の位置が変わった）ので、古い配置で保存された小物の位置は使わない。部屋の外の位置も使わない
-    const props = moved.layout === MAP_LAYOUT ? moved.props || [] : [];
+    const props = moved.layout === (this.def.mapLayout || MAP_LAYOUT) ? moved.props || [] : [];
     props.forEach((v, i) => { const e = this.propEntries[i]; if (!e || !v || !this.stage.inBounds(v[0], v[1], 0.5)) return; const o = e.getPos(); if (Math.abs(o.x - v[0]) > 0.05 || Math.abs(o.z - v[1]) > 0.05 || Math.abs((e.obj.rotation.y || 0) - (v[2] || 0)) > 0.01) e.restore(v); });
-    if (moved.crate) { this.crate.count = moved.crate.n; if (moved.crate.pinned && this.stage.inBounds(moved.crate.x, moved.crate.z, 1)) { this.crate.pos.set(moved.crate.x, 0, moved.crate.z); this.crate.pinned = true; this.settleCrate(); } }
-    if (moved.factory && moved.layout === MAP_LAYOUT && this.stage.inBounds(moved.factory[0], moved.factory[1], 2)) { this.factory.group.position.set(moved.factory[0], 0, moved.factory[1]); this.settleOut(this.factory.group.position, 2.6); }
+    if (moved.crate) {
+      this.crate.count = moved.crate.n;
+      // Ver.0.6：資材箱は自分で動かないので、置いてあった場所をいつも復元する（以前のセーブの「先頭についていく箱」も最後の位置に置く）
+      if (this.stage.inBounds(moved.crate.x, moved.crate.z, 1)) { this.crate.pos.set(moved.crate.x, 0, moved.crate.z); this.crate.group.rotation.y = moved.crate.yaw || 0; this.crate.pinned = !!moved.crate.pinned; this.crate.haulOrder = moved.crate.ho ?? -1; this.settleCrate(); }
+    }
+    if (moved.factory && moved.layout === (this.def.mapLayout || MAP_LAYOUT) && this.stage.inBounds(moved.factory[0], moved.factory[1], 2)) { this.factory.group.position.set(moved.factory[0], 0, moved.factory[1]); this.settleOut(this.factory.group.position, 2.6); }
   }
 
   // ================= 小さな脅威と防衛チュートリアル =================
@@ -357,6 +396,7 @@ export class Game {
 
   unloadStage() {
     if (!this.stageId) return;
+    if (this.railPlans) { this.railPlans.dispose(); this.railPlans = null; }
     if (this.crossings) { this.crossings.dispose(); this.crossings = null; }
     if (this.railway) { this.railway.dispose(); this.railway = null; }
     for (const m of this.campMeshes || []) this.scene.remove(m);
@@ -408,7 +448,7 @@ export class Game {
   placeableCount(type) { return PLACEABLE[type] * this.level(type); }
   placeableUsed(type) {
     if (type === 'minicar' || type === 'marble' || type === 'bridge') return this.pieces.filter((p) => p.type === type).length;
-    return this.placed.filter((p) => p.type === type).length;
+    return this.placed.filter((p) => p.type === type && !p.auto).length; // 設計主任が架けた仮設の歩道橋は数えない
   }
 
   /** 獲得済みパーツに合わせて、小人や設備を現場に出す */
@@ -422,6 +462,7 @@ export class Game {
       while (this.workers.count('chief') < 1) this.workers.hire('chief', quiet);
       while (this.workers.count('wrecker') < 2) this.workers.hire('wrecker', quiet);
       while (this.workers.count('architect') < (this.level('architect') > 0 ? 1 : 0)) this.workers.hire('architect', quiet);
+      if (this.railPlans && this.workers.count('railchief') < 1) { const c = this.workers.hire('railchief', true); c.pos.copy(this.railway.depot).add(new THREE.Vector3(1.5, 0, -1.5)); c.home = c.pos.clone(); }
       while (this.workers.count('railcrew') < 2) { const c = this.workers.hire('railcrew', true); c.pos.copy(this.railway.depot).add(new THREE.Vector3(0, 0, this.workers.count('railcrew') * 1.2)); c.home = c.pos.clone(); }
     }
     if (this.level('watchtower') && !this.tower) {
@@ -647,6 +688,16 @@ export class Game {
   unbuiltCount() { return this.unbuiltList().filter((s) => !s.domino).length; }
   loosePlannedNeed() { return 0; }
   frontSlot() { return this.unbuiltList().find((s) => !s.domino) || null; }
+  /** いま建設が進んでいる所：一番先まで立っているドミノの、すぐ先の未建設マス（途中の小さな抜けは数えない） */
+  buildHead() {
+    // 6枚以上続けて立っている所の先頭（ぽつんと離れて置かれた1枚は数えない）
+    let maxB = -1, run = 0;
+    const ord = this.course.allSlots.filter((s) => s.order >= 0).sort((a, b) => a.order - b.order);
+    for (const s of ord) { if (s.domino && !s.domino.toppled) { if (++run >= 6) maxB = s.order; } else if (!(s.site && s.site.state !== 'open')) run = 0; }
+    let best = null;
+    for (const s of this.unbuiltList()) { if (s.domino || s.order < maxB - 12) continue; if (!best || s.order < best.order) best = s; }
+    return best || this.frontSlot();
+  }
   machineTarget() { return this.unbuiltList().find((s) => !s.domino && (!s.claim || s.claim === -1) && !this.crossBlocked(s) && !this.slotBlocker(s)) || null; }
   /** 線路との交差地点で、まだ解決していないマス（設計主任が建築か撤去を決めるまで並べない） */
   crossBlocked(s) { return !!(this.crossings && this.crossings.blocks(s)); }
@@ -661,18 +712,35 @@ export class Game {
     let best = null, bd = Infinity, k = 0;
     for (const s of list) {
       if (s.domino || s.claim || this.crossBlocked(s) || this.slotBlocker(s)) continue;
+      // Ver.0.6：列はまたげないので、歩いて行ける側があるマスだけ（行けない側なら反対側から）
+      const side = this.reachSide(s, gnome);
+      if (!side) { if (++k > 14) break; continue; } // 行けないマスも数える（遠くの離れた所まで探しに行かない）
       const d = (s.x - gnome.pos.x) ** 2 + (s.z - gnome.pos.z) ** 2 + k * 4;
-      if (d < bd) { bd = d; best = s; }
+      if (d < bd) { bd = d; best = s; best._side = side; }
       if (++k > 14) break;
     }
-    if (best) best.claim = gnome.id;
+    if (best) { best.claim = gnome.id; gnome.side = best._side; }
     return best;
   }
+  /** マスの左右どちらかに歩いて行けるか（行ける側の符号つき距離。どちらも無理なら 0） */
+  reachSide(slot, gnome) {
+    if (!this.nav || !this.nav.version) return gnome.side;
+    const v = (this._rsV ||= new THREE.Vector3());
+    // 横のすぐそば（0.75）がふさがっていたら（倒れたドミノが横たわっている等）、少し離れた所（1.4）から
+    const base = Math.sign(gnome.side) || 1;
+    for (const d of [0.75, 1.4]) for (const sd of [base * d, -base * d]) { this.sideOf(slot, sd, v); if (this.nav.reachable(gnome.pos, v, 1)) return sd; }
+    return 0;
+  }
+  /** 小人がそこへ歩いて行けるか（列の向こう側なら false） */
+  canReach(gnome, p, rb = 12) { return !this.nav || !this.nav.version || this.nav.reachable(gnome.pos, p, rb); }
   supplyFor(gnome) {
-    const near = this.nearestDepot(gnome.pos);
-    if (this.crate.count > 0 && (this.stock <= 0 || this.crate.pos.distanceTo(gnome.pos) < near.pos.distanceTo(gnome.pos) + 12)) return this.crate;
-    if (this.stock > 0) return near;
-    if (this.crate.count > 0) return this.crate;
+    // Ver.0.6：歩いて行ける所だけ（列の向こうの資材箱・倉庫は使えない）
+    const crateOk = this.crate.count > 0 && this.canReach(gnome, this.crate.pos);
+    let near = null, nd = Infinity;
+    if (this.stock > 0) for (const d of this.depots) { const dd = d.pos.distanceToSquared(gnome.pos); if (dd < nd && this.canReach(gnome, d.pos)) { nd = dd; near = d; } }
+    if (crateOk && (!near || this.crate.pos.distanceTo(gnome.pos) < near.pos.distanceTo(gnome.pos) + 12)) return this.crate;
+    if (near) return near;
+    if (crateOk) return this.crate;
     return null;
   }
   nearestDepot(pos) {
@@ -820,9 +888,13 @@ export class Game {
       if (preferAccident && d.accident) dd *= 0.3;
       dd += Math.max(0, d.slot.order) * 0.02;
       // 重なりの確認は、いまの候補より近いものだけ（重い判定を全ドミノに対してしない）
-      if (dd < bd && !covered(d)) { bd = dd; best = d; }
+      if (dd < bd && !covered(d)) {
+        // Ver.0.6：列の向こう側（歩いて行けない所）のドミノは、行ける人にまかせる
+        if (gnome.role === 'restorer' ? !this.canReach(gnome, d.slot, 3) : !this.reachSide(d.slot, gnome)) continue;
+        bd = dd; best = d;
+      }
     }
-    if (best) best.claim = gnome.id;
+    if (best) { best.claim = gnome.id; if (gnome.role !== 'restorer') gnome.side = this.reachSide(best.slot, gnome) || gnome.side; }
     return best;
   }
   /** 本番中：波より十分先の空きマス（ルンバに吸われた等）を復旧係が埋める */
@@ -881,7 +953,7 @@ export class Game {
       if (d.slot && (t.x - d.slot.x) ** 2 + (t.z - d.slot.z) ** 2 <= CFG.restandDistance ** 2) continue; // 自分のマスの近く → 立て直しで直る
       if (!this.blocksASlot(d)) continue;
       const dd = (t.x - gnome.pos.x) ** 2 + (t.z - gnome.pos.z) ** 2;
-      if (dd < bd) { bd = dd; best = d; }
+      if (dd < bd && this.canReach(gnome, t, 3)) { bd = dd; best = d; }
     }
     if (best) best.claim = gnome.id;
     return best;
@@ -897,9 +969,9 @@ export class Game {
       if (s.order < 0 || s.order >= fo) continue;
       if (s.domino || s.claim || this.crossBlocked(s) || this.slotBlocker(s)) continue;
       const d = (s.x - gnome.pos.x) ** 2 + (s.z - gnome.pos.z) ** 2;
-      if (d < bd) { bd = d; best = s; }
+      if (d < bd && this.reachSide(s, gnome)) { bd = d; best = s; }
     }
-    if (best) best.claim = gnome.id;
+    if (best) { best.claim = gnome.id; gnome.side = this.reachSide(best, gnome) || gnome.side; }
     return best;
   }
   /** 重なりの解消（拾って在庫へ） */
@@ -1351,7 +1423,7 @@ export class Game {
     else if (d.slot) { d.accident = true; this.onAccidentTopple(d); this.countAccident(d); }
   }
 
-  /** 建設中の事故：倒れた枚数を数え、連鎖が止まってから観客の反応（倒れている最中はドミノの音を優先） */
+  /** 建設中の事故：倒れた枚数を数える（観客の声や「ブー！」表示は出さない。知らせるのはドミノが倒れる物理音だけ） */
   countAccident(d) {
     const ep = (this.accEp ||= { n: 0, last: 0, x: 0, z: 0 });
     if (!ep.n) { const t = d.body.translation(); ep.x = t.x; ep.z = t.z; }
@@ -1361,11 +1433,8 @@ export class Game {
     const ep = this.accEp;
     if (!ep || !ep.n || this.time - ep.last < 1.3) return;
     const n = ep.n; ep.n = 0;
-    if (this.mode !== 'build' || n < 3 || this.time - (this._crowdT || -99) < 8) return;
-    this._crowdT = this.time;
-    this.audio.crowdAww(n);
+    if (this.mode !== 'build' || n < 3) return;
     this.stats.accidentReactions = (this.stats.accidentReactions || 0) + 1;
-    this.fx.floatAt(tmp.set(ep.x, 2.4, ep.z), n >= 40 ? '😱 ブー！ 大事故…' : 'おぉ〜……あぁ〜……', 'warn', 1.8);
     this.emit('accident', n);
   }
 
@@ -1802,6 +1871,11 @@ export class Game {
     if (this.darts) this.darts.update(dt);
     if (this.railway) this.railway.update(dt);
     if (this.crossings) this.crossings.update(dt);
+    if (this.railPlans) this.railPlans.update(dt);
+    if (this.campLife) this.campLife.update(dt);
+    // 列で囲まれて行けない仕事があれば、歩道橋を架ける（8秒ごと）
+    if (this.mode === 'build' && (this._connT = (this._connT ?? 4) - dt) <= 0) { this._connT = 8; autoConnect(this); }
+    if (this.growMeshes && this.growMeshes.length) for (const m of [...this.growMeshes]) { m.scale.y = Math.min(1, m.scale.y + dt * 1.2); if (m.scale.y >= 1) this.growMeshes.splice(this.growMeshes.indexOf(m), 1); }
     this.updateTutorial();
     this.updateAccidentReaction();
     if (this.nav) this.nav.budget = 3; // 経路探索はフレームごとに最大3件
@@ -1883,9 +1957,10 @@ export class Game {
     for (const d of this.dominoes.list) if (!d.slot) { const t = d.body.translation(), r = d.body.rotation(); loose.push([+t.x.toFixed(2), +t.z.toFixed(2), +t.y.toFixed(3), +r.x.toFixed(4), +r.y.toFixed(4), +r.z.toFixed(4), +r.w.toFixed(4)]); }
     return {
       rail: this.crossings ? this.crossings.serialize() : undefined,
+      railPlans: this.railPlans ? this.railPlans.serialize() : undefined,
       course: this.course.serialize(),
       pieces: this.pieces.map((p) => ({ id: p.id, type: p.type, x: p.x, z: p.z, yaw: p.yaw })),
-      placed: this.placed.map((p) => ({ type: p.type, x: p.x, z: p.z, yaw: p.yaw })),
+      placed: this.placed.map((p) => ({ type: p.type, x: p.x, z: p.z, yaw: p.yaw, auto: p.auto ? 1 : undefined })),
       built, loose,
       stoppers: this.stoppers.map((s) => [slotKey(s.slot), slotKey(s.next), s.locked ? 1 : 0, s.emergency ? 1 : 0]),
       designed: true,
@@ -1917,9 +1992,10 @@ export class Game {
     const designed = d.designed === true;
     // v0.4：ステージ1の設計図が長くなった。古い設計図のデータは配置を在庫に戻し、中間ゴールの記録も新しいコースに合わせて初期化
     const sameCourse = designed && (d.courseVer || 1) === (this.def.courseVer || 1);
-    if (!sameCourse) { d = { ...d, stock: (d.stock || 0) + (d.built || []).length + (d.loose || []).length, built: [], loose: [], stoppers: [], placed: [], checkpoints: [], specials: [], rail: null }; }
+    if (!sameCourse) { d = { ...d, stock: (d.stock || 0) + (d.built || []).length + (d.loose || []).length, built: [], loose: [], stoppers: [], placed: [], checkpoints: [], specials: [], rail: null, railPlans: null }; }
     // 交差地点（階段・撤去）を先に戻す：階段の上のマスは高さが変わるので、ドミノを置く前に
     if (this.crossings) this.crossings.load(d.rail);
+    if (this.railPlans) this.railPlans.load(d.railPlans);
     (d.checkpoints || []).forEach((v, i) => { if (this.checkpoints[i] && v) this.checkpoints[i].done = true; });
     (d.specials || []).forEach((v, i) => { if (this.specials[i] && v) this.specials[i].consumed = true; });
     (d.markers || []).forEach((v, i) => { const m = this.markers[i]; if (m && v) { m.consumed = true; if (m.mesh) this.scene.remove(m.mesh); } });
@@ -1947,7 +2023,7 @@ export class Game {
       } else this.dominoes.create({ x, y: 0, z, yaw: Math.random() * 6 }, { lying: true, frozen: true });
       used++;
     }
-    for (const p of d.placed || []) this.placePiece(p.type, p.x, p.z, p.yaw, true) || null;
+    for (const p of d.placed || []) { const q = this.placePiece(p.type, p.x, p.z, p.yaw, true, !!p.auto); if (q && p.auto) q.auto = true; }
     for (const st of d.stoppers || []) {
       const a = byKey.get(st[0]), b = byKey.get(st[1]);
       if (a && b) { const s = this.installStopper(a, b, !!st[3]); if (s && st[2]) s.setLocked(true); }

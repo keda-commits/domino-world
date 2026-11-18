@@ -46,6 +46,20 @@ export class Crossings {
       i = j + 1;
     }
   }
+  /** 支線（ぽっぽ線が自分で延ばす線路）とコースの交差地点を追加する（Ver.0.6） */
+  addBranchSite(plan, line, c) {
+    const sl = this.game.course.segments[0].slots;
+    c = Math.max(UP + DECK, Math.min(sl.length - 1 - DECK - DOWN, c));
+    const i0 = Math.max(0, c - UP - DECK + 1), i1 = Math.min(sl.length - 1, c + DECK + DOWN);
+    const center = sl[c];
+    const cs = line.closest(center, true).s;
+    const pieces = plan.lines.flatMap((ln) => ln.pieces.filter((p) => p.mid.distanceTo(V(center.x, center.z)) < 2.6).map((p) => ((p.line = ln), p)));
+    const site = { id: this.sites.length, c, i0, i1, center, slots: sl.slice(i0, i1 + 1), trackS: cs, pieces, state: 'wait', plan: null, parts: null, branch: plan, track: line };
+    for (const s of site.slots) s.site = site;
+    this.sites.push(site);
+    this.makeSign(site);
+    return site;
+  }
   /** このマスは今は並べられない（交差地点が未解決） */
   blocks(slot) { return !!(slot && slot.site && slot.site.state !== 'open'); }
 
@@ -79,7 +93,29 @@ export class Crossings {
     x.font = 'bold 34px sans-serif'; x.fillStyle = '#495057'; x.fillText(txt[1], 256, 125);
     t.needsUpdate = true;
   }
-  setState(site, st) { site.state = st; this.drawSign(site); this.game.unbuiltDirty = true; }
+  setState(site, st) { const prev = site.state; site.state = st; this.drawSign(site); this.game.unbuiltDirty = true; if (prev !== st) this.react(site, st); }
+  /** 状態が変わったときの、まわりの人の反応（指示された班が返事して動き出す／通れるようになって喜ぶ） */
+  react(site, st) {
+    const g = this.game, L = g.campLife; if (!L || g.mode !== 'build') return;
+    const c = V(site.center.x, site.center.z);
+    const near = (role, r = 40) => g.workers.list.filter((o) => o.role === role && !o.haul && o.pos.distanceTo(c) < r).sort((a, b) => a.pos.distanceToSquared(c) - b.pos.distanceToSquared(c));
+    if (st === 'removing') near('wrecker', 200).slice(0, 2).forEach((o, i) => L.after(1.0 + i * 0.5, () => { o.say(i ? 'バール用意！' : '了解、外します！'); o.runMult = 1.4; }));
+    if (st === 'stairs') near('architect', 200).slice(0, 1).forEach((o) => L.after(1.0, () => { o.say('任せてください！ 設計図どおりに！'); o.runMult = 1.4; }));
+    if (st === 'open') near('builder', 18).slice(0, 3).forEach((o, i) => L.after(0.4 + i * 0.35, () => {
+      o.say(['やった、進めるぞ！', '通れるようになった！', 'よーし、続きだ！'][i]);
+      if (o.state === 'act' && (o.pose === 'idle' || o.pose === 'shrug')) o.act(0.9, 'cheer', () => o.think());
+    }));
+  }
+  /** 建設が線路の手前で止まった：建設担当が困る（設計主任が来るきっかけ） */
+  complain(site) {
+    const g = this.game; if (site.complainT) return;
+    site.complainT = g.time;
+    const c = V(site.center.x, site.center.z);
+    const b = g.workers.list.filter((o) => o.role === 'builder' && o.pos.distanceTo(c) < 16).sort((a, b2) => a.pos.distanceToSquared(c) - b2.pos.distanceToSquared(c))[0];
+    if (!b) return;
+    b.say('線路があって進めない…', 'warn');
+    if (b.state === 'act' || b.state === 'idle') { b.face2(c); b.act(1.6, 'shrug', () => b.think()); }
+  }
 
   // ================= 設計主任 =================
   /** 建設が交差地点に近づいた（手前の未建設が少ない）か */
@@ -93,7 +129,9 @@ export class Crossings {
     if (g.mode !== 'build') return false;
     // 1) 交差地点の確認と指示
     // 確認の途中で転んだ・つかまれた場合も、やり直す
-    const site = this.sites.find((s) => (s.state === 'wait' && this.nearFront(s)) || s.state === 'inspect');
+    // 建設担当が困ってから（1.5秒後）主任が現場へ向かう。近くに建設担当がいなければすぐ
+    for (const s of this.sites) if (s.state === 'wait' && this.nearFront(s)) this.complain(s);
+    const site = this.sites.find((s) => (s.state === 'wait' && this.nearFront(s) && g.time - (s.complainT || 0) > 1.5) || s.state === 'inspect');
     if (site) {
       this.setState(site, 'inspect');
       w.say('建設が線路にぶつかる…確認に行ってくる！');
@@ -102,12 +140,24 @@ export class Crossings {
         w.face2(V(site.center.x, site.center.z));
         w.act(2.4, 'read', () => {
           const lv = g.level('architect');
-          if (lv >= 2) {
+          const bp = site.branch;
+          if (bp && bp.mode === 'dominoFirst') {
+            // 支線とぶつかった：ドミノの建設を優先。撤去班にレールを外させ、ぽっぽ線には迂回してもらう
+            site.plan = 'removed'; this.setState(site, 'removing');
+            w.say('ドミノの建設が先だ！ 撤去班、レールを外してくれ！', 'warn');
+            bp.onChiefDecision && bp.onChiefDecision(site, 'remove');
+          } else if (bp && lv < 2) {
+            // 立体交差がまだ作れない：ぽっぽ線には、ここの手前で終点にしてもらう
+            site.plan = 'yield'; this.setState(site, 'open');
+            w.say('階段はまだ作れない…ぽっぽ線さん、線路はここまでにしてくれ！', 'warn');
+            bp.onChiefDecision && bp.onChiefDecision(site, 'yield');
+          } else if (lv >= 2) {
+            if (bp) bp.onChiefDecision && bp.onChiefDecision(site, 'stairs');
             site.plan = 'stairs'; this.prepareStairs(site); this.setState(site, 'stairs');
-            w.say('これなら上を越えられる！ エリート建築士、ここに立体交差を！', 'coin');
+            w.say('エリート、ここに階段を架けられるか？', 'coin');
           } else {
             site.plan = 'removed'; this.setState(site, 'removing');
-            w.say(lv >= 1 ? '階段はまだ設計できないな…ここが邪魔か。撤去班、頼む！' : 'ここが邪魔か。撤去班、頼む！', 'warn');
+            w.say(lv >= 1 ? '階段はまだ無理か…撤去班、レールを外してくれ！' : '撤去班、レールを外してくれ！', 'warn');
           }
           g.stats.chiefDecisions = (g.stats.chiefDecisions || 0) + 1;
           w.act(1.2, 'point', () => w.think());
@@ -252,8 +302,7 @@ export class Crossings {
     site.crew ||= {};
     if (site.crew[k] === 'done') return false; // 途中で転んだら、もう一度向かう
     site.crew[k] = 'going';
-    const p = site.pieces[0] || rail.track.pieceAt(site.trackS);
-    const tr = rail.track, mid = tr.pointAt(site.trackS);
+    const tr = site.track || rail.track, mid = tr.pointAt(site.trackS);
     const t = tr.pointAt(site.trackS + 0.5).sub(tr.pointAt(site.trackS - 0.5)).normalize();
     const n = V(-t.z, t.x);
     const sgn = k === 0 ? 1 : -1;
@@ -279,7 +328,7 @@ export class Crossings {
   removeRails(site, crew) {
     const g = this.game, rail = this.rail;
     const removed = [];
-    for (const p of site.pieces) { const m = rail.track.detach(p); if (m) removed.push(p); }
+    for (const p of site.pieces) { const m = (p.line || site.track || rail.track).detach(p); if (m) removed.push(p); }
     g.audio.punch && g.audio.punch();
     // 外したレールを撤去班が線路の脇へ運ぶ（本当に持ち上がって移動する）
     const sl = site.center;
@@ -288,6 +337,7 @@ export class Crossings {
     rail.onRemoved(removed);
     site.removedPieces = removed;
     this.setState(site, 'open');
+    if (site.branch && site.branch.onCut) site.branch.onCut(site);
     const chief = g.workers.list.find((w) => w.role === 'chief');
     if (chief) chief.say('よし、道ができた！ 建設再開だ！', 'coin');
     g.stats.railsRemoved = (g.stats.railsRemoved || 0) + 1;
@@ -308,17 +358,21 @@ export class Crossings {
         if (off > 0.03 || dy > 0.03 || up < 0.998) { g.dominoes.remove(d); s.domino = g.dominoes.create(s, { slot: s, colorIndex: Math.floor(Math.max(0, s.order) / 4) }); n++; }
       }
     }
-    if (n) {
-      g.stats.stairsFixed = (g.stats.stairsFixed || 0) + n;
-      const a = g.workers.list.find((w) => w.role === 'architect') || g.workers.list.find((w) => w.role === 'chief');
-      if (a) a.say(`階段のドミノを点検：${n}枚まっすぐに直しました`, 'coin');
+    // 本番前の点検：主任が指示して、建築士が返事する（階段がある時だけ）
+    const hasStairs = this.sites.some((s) => s.state === 'open' && s.plan === 'stairs');
+    const chief = g.workers.list.find((w) => w.role === 'chief'), arch = g.workers.list.find((w) => w.role === 'architect');
+    if (hasStairs && chief) chief.say('本番前に階段を点検してくれ！');
+    if (n) g.stats.stairsFixed = (g.stats.stairsFixed || 0) + n;
+    if (hasStairs && (arch || chief)) {
+      const a = arch || chief, line = n ? `点検しました！ ${n}枚まっすぐに直しました` : '点検よし！ 階段は大丈夫です';
+      if (g.campLife) g.campLife.after(0.9, () => a.say(line, 'coin')); else a.say(line, 'coin');
     }
     return n;
   }
 
   // ================= 鉄道の修理班（本番のあと） =================
   afterRun() {
-    for (const s of this.sites) if (s.state === 'open' && s.plan === 'removed') { this.setState(s, 'repair'); s.repairT = 0; }
+    for (const s of this.sites) if (!s.branch && s.state === 'open' && s.plan === 'removed') { this.setState(s, 'repair'); s.repairT = 0; }
   }
   update(dt) {
     const g = this.game, rail = this.rail;
@@ -391,7 +445,7 @@ export class Crossings {
   }
 
   // ================= セーブ =================
-  serialize() { return { v: 1, sites: this.sites.map((s) => ({ state: s.state === 'open' || s.state === 'repair' ? s.state : 'wait', plan: s.state === 'open' || s.state === 'repair' ? s.plan : null })) }; }
+  serialize() { return { v: 1, sites: this.sites.filter((s) => !s.branch).map((s) => ({ state: s.state === 'open' || s.state === 'repair' ? s.state : 'wait', plan: s.state === 'open' || s.state === 'repair' ? s.plan : null })) }; }
   load(d) {
     if (!d || !d.sites) return;
     d.sites.forEach((v, i) => {

@@ -11,13 +11,36 @@ import { MAT, rbox, shadow } from './props.js';
  * ゲームの主役はドミノ。鉄道はドミノの世界に入り込んでくる別のおもちゃたち。
  */
 export const BED_H = 0.16; // レールの厚み（ドミノはこの上には立てない）
-export const BED_HW = 0.95; // レールの半幅
+export const BED_HW = 0.6; // レールの半幅（Ver.0.6：幅6cm。実物のおもちゃのレールに近い太さ）
 const BLUE = '#1c7ed6', BLUE_D = '#1864ab', YELLOW = '#fcc419';
 const PIECE = 2.0;
 
 const blueMat = () => new THREE.MeshPhysicalMaterial({ color: BLUE, roughness: 0.32, clearcoat: 0.6, clearcoatRoughness: 0.3 });
 const blueDMat = () => new THREE.MeshPhysicalMaterial({ color: BLUE_D, roughness: 0.35, clearcoat: 0.5 });
 const yellowMat = () => new THREE.MeshPhysicalMaterial({ color: YELLOW, roughness: 0.35, clearcoat: 0.6 });
+
+/** 折れ線（角は半径2で丸める）を0.25ごとの点列にする */
+function polyPoints(poly, step = 0.25, r = 2) {
+  const out = [];
+  const P = poly;
+  const seg = (a, b) => { const n = Math.max(1, Math.ceil(a.distanceTo(b) / step)); for (let i = 0; i < n; i++) out.push(a.clone().lerp(b, i / n)); };
+  let prev = P[0].clone();
+  for (let k = 1; k < P.length; k++) {
+    const b = P[k];
+    if (k < P.length - 1) {
+      const c = P[k + 1];
+      const d1 = b.clone().sub(prev).normalize(), d2 = c.clone().sub(b).normalize();
+      const rr = Math.min(r, b.distanceTo(prev) / 2, c.distanceTo(b) / 2);
+      const p1 = b.clone().addScaledVector(d1, -rr), p2 = b.clone().addScaledVector(d2, rr);
+      seg(prev, p1);
+      // 2次ベジェで角を丸める
+      const n = Math.ceil((rr * 1.6) / step);
+      for (let i = 0; i < n; i++) { const t = i / n; out.push(p1.clone().multiplyScalar((1 - t) ** 2).addScaledVector(b, 2 * (1 - t) * t).addScaledVector(p2, t * t)); }
+      prev = p2;
+    } else { seg(prev, b); out.push(b.clone()); }
+  }
+  return out;
+}
 
 /** 角の丸い長方形の点列（時計回り：西の辺を北へ → 北の辺を東へ → 東の辺を南へ → 南の辺を西へ） */
 function loopPoints(d, step = 0.25) {
@@ -33,18 +56,20 @@ function loopPoints(d, step = 0.25) {
 }
 
 export class ToyTrack {
-  constructor(game, def) {
+  constructor(game, def, poly = null) {
     this.game = game; this.def = def;
-    this.pts = loopPoints(def);
+    // 支線（poly）は折れ線を0.25ごとの点にする（閉じない）
+    this.pts = poly ? polyPoints(poly) : loopPoints(def);
     this.cum = [0];
-    for (let i = 1; i <= this.pts.length; i++) this.cum.push(this.cum[i - 1] + this.pts[i % this.pts.length].distanceTo(this.pts[i - 1]));
+    const N = poly ? this.pts.length - 1 : this.pts.length;
+    for (let i = 1; i <= N; i++) this.cum.push(this.cum[i - 1] + this.pts[i % this.pts.length].distanceTo(this.pts[i - 1]));
     this.len = this.cum[this.cum.length - 1];
     this.group = new THREE.Group(); game.scene.add(this.group);
     this.mats = { blue: blueMat(), blueD: blueDMat(), yellow: yellowMat() };
     this.pieces = [];
     const n = Math.round(this.len / PIECE), L = this.len / n;
     this.pieceLen = L;
-    for (let i = 0; i < n; i++) this.addPiece(i, i * L, (i + 1) * L);
+    for (let i = 0; i < n; i++) this.addPiece(i, i * L, (i + 1) * L, !!poly);
   }
   wrap(s) { return ((s % this.len) + this.len) % this.len; }
   index(s) {
@@ -107,8 +132,9 @@ export class ToyTrack {
   pieceAt(s) { return this.pieces[Math.floor(this.wrap(s) / this.pieceLen) % this.pieces.length]; }
 
   // ---------- 見た目：青いプラスチックのレール（1本ずつ） ----------
-  addPiece(i, s0, s1) {
+  addPiece(i, s0, s1, planOnly = false) {
     const a = this.pointAt(s0), b = this.pointAt(s1), mid = this.pointAt((s0 + s1) / 2);
+    if (planOnly) { const yaw = Math.atan2(b.x - a.x, b.z - a.z); this.pieces.push({ i, s0, s1, mid, yaw, pitch: 0, chord: a.distanceTo(b), state: 'plan', mesh: null, collider: null, elevated: false }); return; }
     const yaw = Math.atan2(b.x - a.x, b.z - a.z);
     const pitch = Math.atan2(b.y - a.y, Math.hypot(b.x - a.x, b.z - a.z));
     const chord = a.distanceTo(b);
@@ -124,7 +150,7 @@ export class ToyTrack {
   pieceMesh(chord) {
     const g = new THREE.Group(), M = this.mats;
     const L = chord - 0.05; // つなぎ目のすき間（組み立て式だと分かるように）
-    const base = new THREE.Mesh(rbox(BED_HW * 2, 0.1, L, 0.04), M.blue); base.position.y = 0.05; g.add(base);
+    const base = new THREE.Mesh(rbox(1.9, 0.1, L, 0.04), M.blue); base.position.y = 0.05; g.add(base);
     // 外側の太いふち（車輪の溝の外側）と、まん中の山
     for (const sx of [-0.8, 0.8]) { const r = new THREE.Mesh(rbox(0.3, 0.12, L, 0.05), M.blue); r.position.set(sx, 0.1, 0); g.add(r); }
     const c = new THREE.Mesh(rbox(0.5, 0.08, L, 0.04), M.blue); c.position.set(0, 0.08, 0); g.add(c);
@@ -134,6 +160,7 @@ export class ToyTrack {
     const tab = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.08, 14), M.blue); tab.position.set(0, 0.05, L / 2 + 0.1); g.add(tab);
     const neck = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.14), M.blue); neck.position.set(0, 0.05, L / 2 + 0.02); g.add(neck);
     const hole = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.17, 0.02, 14), M.blueD); hole.position.set(0, 0.105, -L / 2 + 0.16); g.add(hole);
+    g.scale.x = BED_HW / 0.95; // 形は同じまま、幅だけ実物の比率に
     return shadow(g);
   }
   makeCollider(p) {
@@ -175,7 +202,7 @@ export class ToyTrack {
 }
 
 // ---------- 列車 ----------
-function trainCar(kind, idx, n) {
+export function trainCar(kind, idx, n) {
   const g = new THREE.Group();
   const white = MAT.plastic('#f8f9fa'), blue = MAT.plastic('#1971c2'), glass = MAT.plastic('#343a40');
   const yel = MAT.plastic('#ffd43b'), orange = MAT.plastic('#f76707');
@@ -198,16 +225,18 @@ function trainCar(kind, idx, n) {
     if (head || tail) { const f = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.3, 0.02), glass); f.position.set(0, 0.78, head ? 0.81 : -0.81); g.add(f); }
     const roof = new THREE.Mesh(rbox(0.85, 0.08, 1.4, 0.04), MAT.plastic('#adb5bd')); roof.position.y = 1.03; g.add(roof);
   }
-  // 車輪（黒い小さな丸）と連結器
-  for (const sx of [-0.42, 0.42]) for (const sz of [-0.5, 0.5]) { const w = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.08, 12), MAT.plastic('#212529')); w.rotation.z = Math.PI / 2; w.position.set(sx, 0.17, sz); g.add(w); }
-  if (!tail) { const c = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.3), MAT.plastic('#495057')); c.position.set(0, 0.25, -0.95); g.add(c); }
-  return shadow(g);
+  // Ver.0.6：車体は幅3.6cm・長さ12.5cm（実物のおもちゃの比率）に。車輪と連結器は伸ばさずに付ける
+  g.scale.set(0.75, 1, 1.6);
+  const outer = new THREE.Group(); outer.add(g);
+  for (const sx of [-0.31, 0.31]) for (const sz of [-0.85, 0.85]) { const w = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.08, 12), MAT.plastic('#212529')); w.rotation.z = Math.PI / 2; w.position.set(sx, 0.17, sz); outer.add(w); }
+  if (!tail) { const c = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 0.3), MAT.plastic('#495057')); c.position.set(0, 0.25, -1.42); outer.add(c); }
+  return shadow(outer);
 }
 
 export class ToyTrain {
   constructor(rail, opts) {
     this.rail = rail; this.game = rail.game; this.name = opts.name; this.kind = opts.kind;
-    this.n = opts.cars; this.gap = 1.85;
+    this.n = opts.cars; this.gap = 2.85; // 車両の長さ約12.5cm（実物のおもちゃの比率）
     this.cars = []; this.bodies = [];
     for (let i = 0; i < this.n; i++) {
       const m = trainCar(opts.kind, i, this.n); this.game.scene.add(m); this.cars.push(m);
@@ -348,7 +377,7 @@ export class ToyRailway {
   }
   say(train, text, cls = '') { this.game.fx.floatObj(train.cars[0], `${train.name}「${text}」`, cls, 2.4, 0.4); }
   onStation(train) { if (Math.random() < 0.5) this.say(train, 'リビング駅〜、リビング駅〜', ''); }
-  trainNear(p, r, movingOnly = false) { return this.trains.some((t) => (!movingOnly || Math.abs(t.v) > 0.1) && t.positions().some((q) => (q.x - p.x) ** 2 + (q.z - p.z) ** 2 < r * r && q.y < 0.5)); }
+  trainNear(p, r, movingOnly = false) { return [...this.trains, ...(this.extraTrains || [])].some((t) => (!movingOnly || Math.abs(t.v) > 0.1) && t.positions().some((q) => (q.x - p.x) ** 2 + (q.z - p.z) ** 2 < r * r && q.y < 0.5)); }
   /** 線路を外した：列車の人がちょっと抗議する */
   onRemoved(pieces) {
     this.stats.removed += pieces.length;
@@ -374,4 +403,46 @@ export class ToyRailway {
     for (const m of this.scrapPile) this.game.scene.remove(m);
     if (this.game.audio.toyTrainHum) this.game.audio.toyTrainHum(0);
   }
+}
+
+/**
+ * 支線（Ver.0.6）：ぽっぽ線が自分たちで延ばす線路。折れ線にそって1本ずつ「敷く」。
+ * 本線と同じ部品の形（見た目・当たり判定）で、まだ敷いていない部品は見えない（state: 'plan'）。
+ */
+export class ToyBranch extends ToyTrack {
+  constructor(game, pts, opts = {}) {
+    const def = { open: true };
+    super(game, def, pts.map(([x, z]) => new THREE.Vector3(x, 0, z)));
+    this.name = opts.name || '支線';
+  }
+  wrap(s) { return Math.max(0, Math.min(this.len - 1e-4, s)); }
+  heightAt() { return 0; }
+  closest(p, far = false) {
+    if (!this.cellIdx) this.buildIndex();
+    const near = far ? null : this.cellIdx.get(Math.floor(p.x) * 4096 + Math.floor(p.z));
+    if (!far && !near) return { s: 0, d: Infinity };
+    let bs = 0, bd = Infinity;
+    for (const i of near || this.pts.keys()) {
+      if (i >= this.pts.length - 1) continue;
+      const a = this.pts[i], b = this.pts[i + 1];
+      const abx = b.x - a.x, abz = b.z - a.z, L2 = abx * abx + abz * abz || 1;
+      const t = Math.max(0, Math.min(1, ((p.x - a.x) * abx + (p.z - a.z) * abz) / L2));
+      const x = a.x + abx * t, z = a.z + abz * t, d = (p.x - x) ** 2 + (p.z - z) ** 2;
+      if (d < bd) { bd = d; bs = this.cum[i] + Math.sqrt(L2) * t; }
+    }
+    return { s: bs, d: Math.sqrt(bd) };
+  }
+  /** 計画上の線路の上か（敷いたかどうかは問わない） */
+  onPlan(x, z, m = 0) { return this.closest({ x, z }).d < BED_HW + m; }
+  /** 敷いてある線路の上か */
+  onTrack(x, z, m = 0) {
+    const c = this.closest({ x, z });
+    if (c.d >= BED_HW + m) return false;
+    const p = this.pieceAt(c.s); return !!p && p.state === 'ok';
+  }
+  pieceAt(s) { return this.pieces[Math.min(this.pieces.length - 1, Math.floor(this.wrap(s) / this.pieceLen))]; }
+  /** 1本敷く */
+  lay(p) { if (p.state === 'ok') return; p.state = 'removed'; this.restore(p); }
+  /** 片付ける（迂回で使わなくなった区間）：見た目も当たり判定も消す */
+  clear(p) { if (p.state === 'ok') { this.detach(p); this.group.remove(p.mesh); } p.state = 'plan'; }
 }

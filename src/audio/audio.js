@@ -1,4 +1,4 @@
-import { SUCCESS, GRAND, crowd } from './jingles.js';
+import { SUCCESS, GRAND } from './jingles.js';
 // WebAudio だけで作る効果音とオリジナルBGM（外部音源ファイルなし）。
 // 効果音とBGMは別々の音量で調整できる。
 
@@ -153,8 +153,6 @@ export class Audio {
   success() { if (!this.ok) return; const d = SUCCESS[this.jingle.success](this.ctx, this.sfx, this.ctx.currentTime + 0.05); this.duck(d); }
   /** 最終ゴール到達：大成功のファンファーレ */
   grandClear() { if (!this.ok) return; const d = GRAND[this.jingle.grand](this.ctx, this.sfx, this.ctx.currentTime + 0.05); this.duck(d); }
-  /** 建設中の事故のあと：観客の「おぉ〜……あぁ〜……」 */
-  crowdAww(size) { if (!this.ok) return; crowd(this.ctx, this.sfx, this.ctx.currentTime + 0.05, size); }
   levelUp() { [523, 659, 784, 1046].forEach((f, i) => this.tone(f, 0.18, 'triangle', 0.12, i * 0.08)); }
 
   /** ルンバの掃除音（距離で音量） */

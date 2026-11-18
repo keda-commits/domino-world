@@ -32,6 +32,7 @@ export const ROLE_STYLE = {
   wrecker: { body: '#f76707', hat: '#212529', leg: '#495057', kind: 'hardhat' },
   railcrew: { body: '#1c3d7a', hat: '#1c3d7a', leg: '#14284f', kind: 'cap' },
   stationmaster: { body: '#1c3d7a', hat: '#c92a2a', leg: '#14284f', kind: 'cap' },
+  railchief: { body: '#1c3d7a', hat: '#c92a2a', leg: '#14284f', kind: 'cap', badge: true },
   watchman: { body: '#1f5fd0', hat: '#1f6fe0', leg: '#1b2a4a', kind: 'stopper', vest: '#9be3ff' },
 };
 

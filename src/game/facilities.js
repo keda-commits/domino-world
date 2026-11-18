@@ -77,28 +77,162 @@ export class Crate {
   update(dt) {
     const g = this.game;
     this.cap = 60 + 30 * g.level('basket') + (g.level('train') ? 60 : 0);
-    const front = g.frontSlot();
-    // プレイヤーが運んで置いたら、その場所に固定（建設の先頭を追わない）
-    const tgt = front && !this.pinned && !this.carried ? this.restSpot(front, this._v) : null;
-    if (tgt) {
-      const d = Math.hypot(tgt.x - this.pos.x, tgt.z - this.pos.z);
-      if (d > 6) this.moving = true;
-      if (this.moving) {
-        // ドミノの列・家具をよけて移動（貫通しない）。道がなければその場で待つ
-        this.pf ||= new PathFollower(2);
-        const wp = g.nav && d > 1.5 ? this.pf.next(g.nav, this.pos, tgt, g.time) : tgt;
-        if (wp) {
-          const sx = wp.x - this.pos.x, sz = wp.z - this.pos.z, sd = Math.hypot(sx, sz);
-          const step = Math.min(sd, 8 * g.odMult() * dt);
-          if (sd > 1e-3) { this.pos.x += (sx / sd) * step; this.pos.z += (sz / sd) * step; }
-        }
-        if (d < 0.1) { this.moving = false; this.pf.reset(); }
-      }
-    } else if (this.moving) this.moving = false;
-    if (!this.carried) this.pos.y = g.stage.heightAt(this.pos.x, this.pos.z);
+    // Ver.0.6：資材箱は自分では動かない。運搬担当が4人そろったときだけ、4人で担いで前線へ運ぶ
+    this.updateHaul(dt);
+    if (!this.carried && !this.haul) this.pos.y = g.stage.heightAt(this.pos.x, this.pos.z);
     this.syncCollider();
     const show = Math.min(24, Math.ceil(this.count / Math.max(1, this.cap / 24)));
     for (let i = 0; i < 24; i++) this.minis[i].visible = i < show;
+  }
+
+  // ================= 4人で担いで運ぶ（Ver.0.6） =================
+  /** 四隅の持ち手の位置（i＝0..3）。箱の外側、角の少し外 */
+  corner(i, out = new THREE.Vector3(), yaw = this.group.rotation.y, at = this.pos) {
+    const lx = (i & 1 ? 1 : -1) * 1.5, lz = (i & 2 ? 1 : -1) * 1.15;
+    const c = Math.cos(yaw), s = Math.sin(yaw);
+    return out.set(at.x + lx * c + lz * s, 0, at.z - lx * s + lz * c);
+  }
+  /** 担いで歩けるか（箱と4人の外形の中にドミノがない） */
+  haulClear(x, z, yaw) {
+    const g = this.game, c = Math.cos(yaw), s = Math.sin(yaw);
+    for (const d of g.dominoes.near(x, z)) {
+      if (d.held || d.removed) continue;
+      const t = d.body.translation();
+      if (t.y > 2.2) continue;
+      const dx = t.x - x, dz = t.z - z;
+      const lx = dx * c - dz * s, lz = dx * s + dz * c;
+      if (Math.abs(lx) < 2.05 && Math.abs(lz) < 1.7) return false;
+    }
+    return true;
+  }
+  // 近くにいる運搬担当だけ（遠くから呼び集めると、集まる前に時間切れになる）
+  haulCrew() { return this.game.workers.list.filter((w) => w.role === 'carrier' && !w.haul && !w.removed && (w.state === 'walk' || w.state === 'act' || w.state === 'idle') && w.pos.distanceTo(this.pos) < 30 && this.game.canReach(w, this.pos, 6)); }
+  updateHaul(dt) {
+    const g = this.game, h = this.haul;
+    if (!h) {
+      if ((this.haulCheck = (this.haulCheck || 0) - dt) > 0) return;
+      this.haulCheck = 1.5;
+      // プレイヤーが置いた直後は、その場所を尊重する（しばらくは担いで動かさない）
+      if (g.mode !== 'build' || this.carried || (this.pinned && g.time - (this.pinT ?? -1e9) < 90) || g.time < (this.haulCool || 0)) return;
+      // 行き先：いま建設が進んでいる所（いちばん先まで立っているドミノの次）。前に運んだ所より後ろへは戻らない
+      const front = g.buildHead();
+      if (!front || front.order <= (this.haulOrder ?? -1)) { this.waitingCrew = false; return; }
+      const tgt = this.restSpot(front, new THREE.Vector3());
+      if (!tgt || Math.hypot(tgt.x - this.pos.x, tgt.z - this.pos.z) < 12) { this.waitingCrew = false; return; }
+      const crew = this.haulCrew();
+      this.waitingCrew = crew.length < 4; // 4人未満：箱は動かない（小分けの配達はいつもどおり）
+      if (crew.length < 4) return;
+      crew.sort((a, b) => a.pos.distanceToSquared(this.pos) - b.pos.distanceToSquared(this.pos));
+      const team = crew.slice(0, 4);
+      this.haul = { phase: 'gather', crew: team, tgt, t: 0, pf: new PathFollower(4), stillT: 0, order: front.order };
+      team.forEach((w, i) => { w.haul = this; w.haulIdx = i; w.haulReady = false; w.think(); });
+      team[0].say('資材箱を前へ運ぶぞ！ 4人集合〜！');
+      g.stats.crateHauls = (g.stats.crateHauls || 0) + 1;
+      return;
+    }
+    h.t += dt;
+    const crew = h.crew;
+    if (this.carried) return this.endHaul(false, 'player');
+    // 誰かが転んだ・つかまれた・逃げた：全員止まって、安全に下ろす
+    const broken = crew.find((w) => w.removed || w.haul !== this || (h.phase !== 'gather' && w.state !== 'hauled'));
+    if (broken && h.phase !== 'lower' && h.phase !== 'abort') {
+      if (h.phase === 'gather') return this.endHaul(false, 'gather');
+      h.phase = 'abort'; h.t = 0; h.y0 = this.pos.y;
+      const talk = crew.find((w) => w !== broken && w.state === 'hauled');
+      if (talk) talk.say('止まれ〜！ ゆっくり下ろすぞ', 'warn');
+      g.stats.haulAborts = (g.stats.haulAborts || 0) + 1;
+    }
+    switch (h.phase) {
+      case 'gather': {
+        if (crew.every((w) => w.haulReady)) {
+          h.phase = 'lift'; h.t = 0;
+          crew.forEach((w) => { w.state = 'hauled'; w.pose = 'liftbox'; w.poseT = 0; });
+          crew[0].say('せーのっ！');
+        } else if (h.t > 35) this.endHaul(false, 'gather');
+        break;
+      }
+      case 'lift': {
+        const k = Math.min(1, h.t / 0.9);
+        this.pos.y = g.stage.heightAt(this.pos.x, this.pos.z) + 0.55 * k;
+        this.placeCrew(0, 'liftbox');
+        if (k >= 1) { h.phase = 'walk'; h.t = 0; }
+        break;
+      }
+      case 'walk': {
+        const d = Math.hypot(h.tgt.x - this.pos.x, h.tgt.z - this.pos.z);
+        if (d < 0.15) { h.phase = 'lower'; h.t = 0; h.y0 = this.pos.y; break; }
+        const wp = d > 1.5 && g.nav ? h.pf.next(g.nav, this.pos, h.tgt, g.time) : h.tgt;
+        if (!wp) {
+          h.stillT += dt; this.placeCrew(0, 'liftbox');
+          if (h.stillT > 8) { h.phase = 'lower'; h.t = 0; h.y0 = this.pos.y; crew[0].say('この先は通れない…ここに置こう', 'warn'); }
+          break;
+        }
+        const sx = wp.x - this.pos.x, sz = wp.z - this.pos.z, sd = Math.hypot(sx, sz) || 1;
+        // 歩調を合わせる：一番遅い人の速さ。向きはゆっくり進行方向へ（長い辺を前後に）
+        const sp = CFG.walkSpeed * 0.55 * Math.min(...crew.map((w) => w.speed));
+        const step = Math.min(sd, sp * dt);
+        let dy = -Math.atan2(sz, sx) - this.group.rotation.y;
+        while (dy > Math.PI) dy -= Math.PI * 2;
+        while (dy < -Math.PI) dy += Math.PI * 2;
+        if (Math.abs(dy) > Math.PI / 2) dy += dy > 0 ? -Math.PI : Math.PI;
+        const nyaw = this.group.rotation.y + dy * Math.min(1, dt * 2.5);
+        const nx = this.pos.x + (sx / sd) * step, nz = this.pos.z + (sz / sd) * step;
+        // 実際の位置で、箱と4人の体がドミノに当たらないか（当たるなら止まって道を探し直す）
+        const v = new THREE.Vector3();
+        const hit = !this.haulClear(nx, nz, nyaw) || crew.some((w, i) => { this.corner(i, v, nyaw, { x: nx, z: nz }); return g.bodyContact(v.x, v.z, 0) > 0; });
+        if (hit) {
+          h.stillT += dt; this.placeCrew(0, 'liftbox');
+          if (h.stillT > 1) h.pf.reset();
+          if (h.stillT > 8) { h.phase = 'lower'; h.t = 0; h.y0 = this.pos.y; crew[0].say('ドミノが近い…いったん下ろそう', 'warn'); }
+          break;
+        }
+        h.stillT = 0;
+        this.pos.x = nx; this.pos.z = nz; this.group.rotation.y = nyaw;
+        this.pos.y = g.stage.heightAt(nx, nz) + 0.55 + Math.abs(Math.sin(h.t * 7)) * 0.03;
+        this.placeCrew(step / Math.max(dt, 1e-4), 'carrybox');
+        // 歩いている間はつまずくこともある（ブーツで減る）
+        const tripMul = g.level('boots') > 0 ? 0.6 : 1;
+        for (const w of crew) if (Math.random() < CFG.tripChancePerSec * 0.6 * tripMul * dt) { w.state = 'walk'; w.trip(); break; }
+        break;
+      }
+      case 'lower': case 'abort': {
+        const k = 1 - Math.min(1, h.t / 0.9);
+        const floor = g.stage.heightAt(this.pos.x, this.pos.z);
+        this.pos.y = floor + Math.max(0, (h.y0 ?? floor) - floor) * k;
+        this.placeCrew(0, 'liftbox', true);
+        if (k <= 0) this.endHaul(h.phase === 'lower', h.phase);
+        break;
+      }
+    }
+  }
+  /** 4人を四隅に立たせる（進む向きを見て持つ） */
+  placeCrew(speed, pose, onlyHolding = false) {
+    const h = this.haul, v = new THREE.Vector3(), g = this.game;
+    h.crew.forEach((w, i) => {
+      if (onlyHolding && w.state !== 'hauled') return;
+      if (w.state !== 'hauled') return;
+      this.corner(i, v);
+      w.pos.x = v.x; w.pos.z = v.z; w.pos.y = g.stage.heightAt(v.x, v.z);
+      w.yaw = this.group.rotation.y + Math.PI / 2;
+      w.pose = pose; w.haulSpeed = speed;
+    });
+  }
+  endHaul(arrived, why) {
+    const g = this.game, h = this.haul;
+    this.haul = null;
+    this.pos.y = g.stage.heightAt(this.pos.x, this.pos.z);
+    this.syncCollider();
+    g.navDirty = true;
+    if (!arrived) this.haulCool = g.time + (why === 'gather' ? 40 : 10);
+    h.crew.forEach((w, i) => {
+      if (w.haul !== this) return;
+      w.haul = null; w.haulReady = false;
+      if (w.state === 'hauled' || w.state === 'act' || w.state === 'walk' || w.state === 'idle') {
+        if (arrived && i === 0) w.say('よいしょ、到着！');
+        w.act(0.7, arrived ? 'cheer' : 'shrug', () => w.think());
+      }
+    });
+    if (arrived) { g.stats.crateArrived = (g.stats.crateArrived || 0) + 1; this.haulOrder = h.order; }
   }
 }
 

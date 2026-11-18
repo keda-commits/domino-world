@@ -51,7 +51,7 @@ export const PARTS = {
   // ---------- 運搬・回収 ----------
   carrier: {
     name: '運搬担当', icon: '📦', category: 'logistics', rarity: 'common', max: 6, stages: [1, 2], minLevel: 2,
-    desc: (lv) => `倉庫から最前線の資材置き場へ運ぶ（${lv}→${lv + 1}人）`,
+    desc: (lv) => `倉庫から資材箱へドミノを運ぶ。4人そろうと資材箱ごと担いで前線へ運ぶ（${lv}→${lv + 1}人）`,
   },
   collector: {
     name: '回収担当', icon: '🧺', category: 'logistics', rarity: 'common', max: 6, stages: [1, 2],

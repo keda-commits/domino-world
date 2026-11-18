@@ -56,6 +56,7 @@ export const STAGES = {
     goalText: '青い線路の向こうへドミノをつなぎ、連鎖で巨大からくり装置を起動する',
     target: 1300, // 設計規模（クリア条件ではない）
     courseVer: 2, // Ver.0.6：鉄道（青いおもちゃの線路）と交差する設計図に作り直した
+    mapLayout: 3, // Ver.0.6：家具の配置を見直した（古い配置で保存された小物の位置は使わない）
     bounds: { minX: -88.8, maxX: 88.8, minZ: -56.4, maxZ: 56.4 }, // Ver.0.5：約20%広く（コースはそのまま）
     floor: { w: 220, d: 160, tone: 'dark' },
     start: { x: -71.5, z: -42, yaw: 0 },
@@ -64,12 +65,21 @@ export const STAGES = {
     markers: [],
     chests: [],
     gachaMachine: null,
-    towerSpot: { x: -52, z: 10 }, hqSpot: { x: -44, z: 51 },
+    towerSpot: { x: -52, z: 10 }, hqSpot: { x: -58, z: 40 },
     gachaSpot: { x: -28, z: -50.4, yaw: 0 },
     // Ver.0.6：ステージ2は鉄道（おもちゃの青い線路）の勢力だけ。ルンバ・ネズミ・ボールは出ない
     // 青い線路：角の丸い長方形の環状線（北側の一部は黄色い橋脚の高架）。ドミノのコースとは4か所で交わる
-    toyRail: { x0: -36, x1: 62, z0: -32, z1: 22, r: 8, elevated: { x0: -4, x1: 30, h: 2.4 }, station: { x: 12 }, depot: { z: -15 } },
-    camps: { builders: { x: -62, z: 12 }, logistics: { x: -64, z: 44 }, safety: { x: -44, z: 48 }, machines: { x: 72, z: 48 }, storage: { x: 52.5, z: -54.2, yaw: 0 } },
+    toyRail: {
+      x0: -36, x1: 62, z0: -32, z1: 22, r: 8, elevated: { x0: -4, x1: 30, h: 2.4 }, station: { x: 12 }, depot: { z: -15 },
+      // ぽっぽ線の路線計画（Ver.0.6）：鉄道の側にも「この駅まで線路をつなげたい」目的がある。決まった2本だけ
+      plans: [
+        { id: 'A', name: '廊下線', goal: '廊下駅', shortGoal: '廊下口駅', mode: 'dominoFirst', startOrder: 20, train: '廊下線ぽっぽ', lines: [[[-36.8, -4], [-84, -4]]] },
+        { id: 'B', name: '手前線', goal: '手前駅', shortGoal: 'ゴール前駅', mode: 'bridge', startOrder: 900, train: '手前線ぽっぽ',
+          lines: [[[44, 22.8], [44, 28], [68, 28], [68, 51]], [[46.4, 22.8], [46.4, 25.6], [70.4, 25.6], [70.4, 51]]] },
+      ],
+    },
+    // 小人の村：廊下の奥の隅（建設隊）、手前左の隅（物流）、ソファの脚元（防災）、奥の右の隅（機械）
+    camps: { builders: { x: -79, z: -47 }, logistics: { x: -80, z: 47 }, safety: { x: -41, z: 49 }, machines: { x: 80, z: -48 }, storage: { x: 52.5, z: -54.2, yaw: 0 } },
     soldierPosts: [[-48, 14], [-10, 30], [30, -38], [-44, -30]],
     factorySpot: { x: -80, z: 29 },
     guardPosts: [[-48, 14], [0, 25.5], [52, 10], [20, -36], [-30, -37]],
@@ -311,18 +321,27 @@ function buildStage2(st) {
 
   const cp = st.add(new THREE.Mesh(P.rbox(56, 0.04, 40, 0.02, 2), pbr('poly_wool_herringbone', [6, 4.5], { maps: ['diff', 'nor_gl'], color: '#9fb0d6', normal: 1.2 })), 5, -8); cp.position.y = 0.02; cp.receiveShadow = true;
 
-  st.group.add(model('sofa_02', { width: 36, x: 5, z: -49.9 })); st.rect(5, -49.4, 17, 6, 0, 10);
-  st.group.add(model('modern_coffee_table_01', { width: 18, fit: 'z', x: -10, z: 42 }));
-  for (const sz of [-1, 1]) st.rect(-10, 42 + sz * 8.4, 4.5, 0.6, 0, 6); // V字の脚（両端）
-  st.add(P.tvStand(28, 6), 20, 54.5, Math.PI); st.rect(20, 54.5, 14, 3, 0, 30);
+  // Ver.0.6：リビングの配置を見直し（1単位＝約5cm）。テレビは奥の壁、ソファ・ローテーブル・ラグ・ひじ掛けいすは
+  // 手前の空いた所にまとめてテレビの方を向ける。おもちゃは子どもが線路のまわりに広げたように。小人の村は部屋の隅と家具の脚元に
+  // テレビ台：幅1.4m・高さ30cm、テレビ約52型（奥の壁ぎわ、部屋の方を向く）
+  st.add(P.tvStand(28, 6), 5, -53.4, 0); st.rect(5, -53.4, 14, 3, 0, 30);
+  // ラグ（ソファとローテーブルの下）
+  const rug2 = st.add(new THREE.Mesh(P.rbox(48, 0.04, 26, 0.02, 2), pbr('poly_wool_herringbone', [5, 2.6], { maps: ['diff', 'nor_gl'], color: '#e8c9a0', normal: 1.2 })), -8, 38); rug2.position.y = 0.022; rug2.receiveShadow = true;
+  // ソファ：幅1.9m・高さ75cm・奥行き86cm。背中を手前の壁に向け、テレビの方を向く
+  st.group.add(model('sofa_02', { width: 38, x: -8, z: 47.6, yaw: Math.PI })); st.rect(-8, 47.6, 18, 6.6, 0, 10);
+  // ローテーブル：長さ1.1m・高さ35cm（ソファの前、すねの高さ）。脚の間は小人が通れる
+  st.group.add(model('modern_coffee_table_01', { width: 22, fit: 'z', x: -8, z: 30.5, yaw: Math.PI / 2 }));
+  for (const sx of [-1, 1]) st.rect(-8 + sx * 10.2, 30.5, 0.6, 4.6, 0, 7); // V字の脚（両端）
+  // ひじ掛けいす：幅75cm・高さ94cm。ソファの右手で、テレビとテーブルの方へ斜めに向ける
+  st.group.add(model('ArmChair_01', { width: 15, x: 20, z: 42, yaw: Math.PI - 0.55 })); st.rect(20, 42, 7.2, 6.4, -0.55, 10);
+  // おもちゃ：線路のそばの車、ラグの端の積み木、ソファに寄りかかったくま
+  st.prop(P.toyCar('#1c7ed6', 0.9), 34, 27.5, 0.25, { hw: 4.2, hd: 2.4 }, 4, 'おもちゃの車');
+  st.prop(P.blocks(4, 2), -36, 30, 0.4, { r: 2.4 }, 12, '積み木');
+  st.prop(P.teddy(0.7), -31.5, 46, 1.3, { r: 3.6 }, 10, 'くまのぬいぐるみ');
+  st.prop(P.plant(0.9), -50, 53.2, 0, { r: 3 }, 10, '植木鉢');
   st.group.add(model('wooden_bookshelf_worn', { width: 16, x: 40, z: -53.7 })); st.rect(40, -53.9, 8.2, 2.2, 0, 18);
   st.prop(P.plant(1), -48, -51.4, 0, { r: 3.2 }, 10, '植木鉢');
   st.prop(P.plant(1.1), 84.3, -27, 0, { r: 3.4 }, 10, '植木鉢'); // 充電台への帰り道をふさがない位置
-  st.prop(P.plant(0.9), -82.8, 53.4, 0, { r: 3 }, 10, '植木鉢');
-  st.group.add(model('ArmChair_01', { width: 15, x: 26, z: 47, yaw: Math.PI })); st.rect(26, 47, 7.5, 6.5, Math.PI, 10);
-  st.prop(P.toyCar('#1c7ed6', 0.9), -30, 53.4, 1.2, { hw: 4.2, hd: 2.4 }, 4, 'おもちゃの車');
-  st.prop(P.blocks(4, 2), -60, 28, 0, { r: 2.4 }, 12, '積み木');
-  st.prop(P.teddy(0.7), -78.8, 39.4, 1.0, { r: 3.6 }, 10, 'くまのぬいぐるみ');
 }
 
 function floor(w, d, mat) {

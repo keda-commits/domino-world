@@ -3,6 +3,7 @@ import { PathFollower } from '../game/nav.js';
 const REACH = 1.6; // 復旧係のマジックハンドが届く距離
 import { CFG } from '../config.js';
 import { buildGnome, looseMats } from './gnomeModel.js';
+import { chiefRoutine } from '../game/chief.js';
 
 const tmp = new THREE.Vector3();
 const looseGeo = new THREE.BoxGeometry(CFG.dominoW, CFG.dominoT, CFG.dominoH);
@@ -15,7 +16,7 @@ const SAY = {
   restorer: ['復旧はおまかせ！', '出動準備よし！'],
   guard: ['警備開始！', 'ルンバは通さない！'],
   soldier: ['気をつけ！', '持ち場につきます！', 'ドミノは守ります！'],
-  chief: ['設計主任です。現場の段取りはお任せを'], architect: ['エリート建築士、参上！', '設計図はできています'], wrecker: ['撤去班、待機します'], railcrew: ['ぽっぽ線の保線係です']
+  chief: ['設計主任です。現場の段取りはお任せを'], architect: ['エリート建築士、参上！', '設計図はできています'], wrecker: ['撤去班、待機します'], railcrew: ['ぽっぽ線の保線係です'], railchief: ['ぽっぽ線の保線主任です。路線を延ばしますよ']
 };
 
 /**
@@ -71,10 +72,12 @@ export class Gnome {
     // 手が空いたら（長めの待ち）自分の待機所へ戻る。ガチャの前などに人が溜まらないように
     const home = time >= 1 && (pose === 'idle' || pose === 'shrug') && this.game.mode === 'build' && this.role !== 'guard' && this.role !== 'soldier' ? this.game.campPos(this.role) : null;
     if (home && Math.hypot(home.x - this.pos.x, home.z - this.pos.z) > 4) {
-      const off = new THREE.Vector3(Math.cos(this.id * 2.4) * 2.6, 0, Math.sin(this.id * 2.4) * 2.6).add(home);
-      return this.goto(() => off, () => this.idleFun(time) || this.act(time, pose, () => this.think()));
+      let off = new THREE.Vector3(Math.cos(this.id * 2.4) * 2.6, 0, Math.sin(this.id * 2.4) * 2.6).add(home);
+      // 村の家・庭・ハンモックの上には立たない（通れる所へ）
+      const nv = this.game.nav; if (nv && nv.version) { const k = nv.nearestFree(off, 0, 6); if (k >= 0) off = nv.center(k); }
+      return this.goto(() => off, () => (this.game.campLife && this.game.campLife.offer(this, time)) || this.idleFun(time) || this.act(time, pose, () => this.think()));
     }
-    if (home && this.idleFun(time)) return;
+    if (home && ((this.game.campLife && this.game.campLife.offer(this, time)) || this.idleFun(time))) return;
     this.act(time, pose, () => this.think());
   }
 
@@ -171,8 +174,11 @@ export class Gnome {
     this.m.held.visible = false;
     this.pose = 'idle';
     const g = this.game;
-    this.funKind = null; this.slacking = false;
+    this.funKind = null; this.slacking = false; this.forcing = false; this.stuckT = 0; this._stuckSaid = false; this._stuckRep = false;
     if (this.m.ball) this.m.ball.visible = false;
+    if (this.life && g.campLife) g.campLife.leave(this);
+    this.liftY = 0;
+    if (this.haul) return this.thinkHaul();
     if (this.role !== 'soldier' && this.role !== 'guard' && !this.standby && this.maybeSlack()) return;
     if (g.mode === 'run' && this.role === 'restorer') {
       const rd = g.findRestandJob(this, Infinity, true);
@@ -196,10 +202,11 @@ export class Gnome {
       case 'restorer': return this.thinkRestorer();
       case 'guard': return this.thinkGuard();
       case 'soldier': return this.thinkSoldier();
-      case 'chief': if (g.crossings && g.crossings.thinkChief(this)) return; break;
+      case 'chief': if (g.crossings && g.crossings.thinkChief(this)) return; if (chiefRoutine(this, g)) return; break;
       case 'architect': if (g.crossings && g.crossings.thinkArchitect(this)) return; break;
       case 'wrecker': if (g.crossings && g.crossings.thinkWrecker(this)) return; break;
-      case 'railcrew': if (this.atSite) return this.act(0.5, 'idle', () => {}); break;
+      case 'railcrew': if (this.atSite) return this.act(0.5, 'idle', () => {}); if (!this.busy && g.railPlans && g.railPlans.thinkCrew(this)) return; break;
+      case 'railchief': if (g.railPlans && g.railPlans.thinkRailChief(this)) return; break;
     }
     this.wait(1);
   }
@@ -236,12 +243,18 @@ export class Gnome {
     const slot = g.findBuildJob(this);
     if (!slot) {
       if (g.unbuiltCount() === 0) { g.returnToStock(this.load); this.load = 0; }
+      // 並べられるマスがない（線路待ち・列の向こう）：その間に、倒れているドミノを起こしに行く
+      const rd = g.findRestandJob(this, Infinity);
+      if (rd) return this.doRestand(rd);
       return this.wait(0.6);
     }
     this.job = slot;
     this.goto(() => g.sideOf(slot, this.side, tmp), () => {
       if (slot.domino || slot.claim !== this.id) { this.releaseJob(); return this.think(); }
       this.face(slot);
+      // マスの上に仲間が立っている：置くとぶつかるので、どくまで待つ
+      const blocker = g.workers.list.find((o) => o !== this && o.state !== 'held' && Math.hypot(o.pos.x - slot.x, o.pos.z - slot.z) < CFG.gnomeR + 0.42);
+      if (blocker) { if (!this._waitSay || g.time - this._waitSay > 6) { this._waitSay = g.time; this.say('ちょっとどいて〜'); } this.releaseJob(); return this.act(0.5, 'idle', () => this.think()); }
       this.act(CFG.placeTime / this.speed, 'place', () => {
         this.releaseJob();
         if (slot.domino) return this.think();
@@ -298,6 +311,20 @@ export class Gnome {
     }
     // 向かっている途中にプレイヤーがつかんだ・別の人が片付けた場合は、そのマスの横で止まって考え直す
     this.goto(() => g.sideOf(d.slot || slot, this.side, tmp), work);
+  }
+
+  // ---------- 資材箱を4人で担ぐ（Ver.0.6） ----------
+  thinkHaul() {
+    const g = this.game, c = this.haul;
+    if (!c.haul || c.haul.phase !== 'gather') return this.act(0.3, 'idle', () => this.think());
+    if (this.haulReady) return this.act(0.3, 'idle', () => { this.face2(c.pos); this.think(); });
+    const v = new THREE.Vector3();
+    this.goto(() => c.corner(this.haulIdx, v), () => {
+      // 持っていたドミノは箱へ入れてから持ち手につく
+      if (this.load > 0) { const put = Math.min(this.load, c.cap - c.count); c.count += put; this.load -= put; if (this.load > 0) { g.returnToStock(this.load); this.load = 0; } }
+      this.haulReady = true; this.face2(c.pos);
+      this.act(0.3, 'idle', () => this.think());
+    }, 1.3);
   }
 
   // ---------- 運搬小人 ----------
@@ -567,11 +594,39 @@ export class Gnome {
     if (Math.random() < 0.5) this.game.audio.squeak(1.6);
   }
 
+  /** 道がふさがって進めない：その場で待つ。長く続いたら仕事を手放して考え直す（同じ所に突っ込み続けない） */
+  stall(dt, d) {
+    this.pose = 'idle';
+    this.stuckT = (this.stuckT || 0) + dt;
+    // 横着な小人：しばらく待っても通れないと、無理やり横切ろうとする（体が当たったドミノは物理で倒れる）
+    if (this.stuckT > 1.5 && !this.forcing && this.maybeForce(d)) { this.stuckT = 0; return; }
+    if (this.stuckT > 2 && !this._stuckRep) { this._stuckRep = true; this.game.lastStuck = { w: this, pos: this.pos.clone(), t: this.game.time }; }
+    if (this.stuckT > 1.2 && !this._stuckSaid) { this._stuckSaid = true; if (Math.random() < 0.5) this.say(d < 4 ? '通れない…' : 'ぐるっと回れないなあ', 'warn'); }
+    if (this.stuckT > 6) {
+      this.stuckT = 0; this._stuckSaid = false; this._stuckRep = false;
+      this.game.stats.stuckGiveUps = (this.game.stats.stuckGiveUps || 0) + 1;
+      if (this.job && this.job.slot === undefined && this.job.order !== undefined) this.side = -this.side; // 建設のマス：反対側から
+      this.releaseJob();
+      this.act(1.0 + Math.random(), 'shrug', () => this.think());
+    }
+  }
+  /** 横着な小人：遠回りしかない・道がないとき、ときどき列を無理やり横切る（体が当たったドミノは物理で倒れる） */
+  maybeForce(d) {
+    const g = this.game;
+    if (this.forcing || g.mode !== 'build' || d > 7 || this.trait.lazy < 0.8 || g.time < (this.forceCool || 0)) return false;
+    this.forceCool = g.time + 40 + Math.random() * 40;
+    if (Math.random() > 0.35) return false;
+    this.forcing = true; g.stats.forcedCross = (g.stats.forcedCross || 0) + 1;
+    this.say('ちょっと通るよ〜', 'warn');
+    return true;
+  }
+
   // ---------- 更新 ----------
   update(dt) {
     const g = this.game;
     this.walking = false;
     if (this.state === 'held' || this.state === 'falling') { this.poseT += dt; this.phase = (this.phase || 0) + dt * 14; this.animate(dt); return; }
+    if (this.state === 'hauled') { this.poseT += dt; this.walking = (this.haulSpeed || 0) > 0.05; if (this.walking) this.phase = (this.phase || 0) + dt * 9; this.animate(dt); return; }
     if (this.state !== 'trip' && this.state !== 'flee') {
       const danger = g.dangerNear(this.pos);
       if (danger) {
@@ -593,30 +648,45 @@ export class Gnome {
           if (this.pf) this.pf.reset();
           if (cb) cb(); else this.state = 'idle';
         } else {
-          // ドミノの列・家具をよけて歩く（目的地のすぐ近くだけ直進）
+          // ドミノの列・家具をよけて歩く（目的地のすぐ近くだけ直進）。Ver.0.6：列はまたがない。道がなければ待つ
           let sx = dx, sz = dz, sd = d;
-          this.direct = false;
-          if (g.nav && d > 1.5) {
+          if (g.nav && d > 1.5 && !this.forcing) {
             this.pf ||= new PathFollower(0);
             const wp = this.pf.next(g.nav, this.pos, tgt, g.time);
             if (wp) { sx = wp.x - this.pos.x; sz = wp.z - this.pos.z; sd = Math.hypot(sx, sz) || 1; }
-            else this.direct = this.pf.fail > 2; // どうしても道がない：まっすぐ（ぶつかる危険あり）
-            if (!wp && !this.direct) { this.pose = 'idle'; break; }
+            else {
+              // 道がない（列の向こう側）。横着な小人はときどき無理やり通ろうとする（体が当たれば本当に倒れる）
+              if (this.pf.fail >= 1 && this.maybeForce(d)) break;
+              this.stall(dt, d); break;
+            }
           }
-          // ドミノの列をまたいでいる：そろそろ歩き、ときどき足が当たって倒してしまう（歩道橋があれば安全）
-          const ck = g.nav ? g.nav.idx(this.pos.x, this.pos.z) : -1;
-          const crossing = g.nav && g.nav.isCrossing(ck);
-          if (crossing && !this.wasCrossing) {
-            g.stats.crossings = (g.stats.crossings || 0) + 1;
-            const risk = 0.1 * (g.level('boots') ? 0.7 : 1) * (1 - 0.25 * g.level('level'));
-            if (Math.random() < risk) { g.stats.crossingBumps = (g.stats.crossingBumps || 0) + 1; this.crossBump = true; }
+          let st = Math.min(step, sd), mx = (sx / sd) * st, mz = (sz / sd) * st;
+          // 実際の位置で、体とドミノが当たるかを確かめる（すり抜けない）
+          const cur = g.bodyContact(this.pos.x, this.pos.z, this.pos.y);
+          const nxt = g.bodyContact(this.pos.x + mx, this.pos.z + mz, this.pos.y);
+          if (nxt > 0 && nxt >= cur - 1e-4) {
+            if (this.forcing) {
+              // 横着：体で押しのけて進む（押す力はめり込み量から。倒れるかどうかは物理しだい）
+              g.pushByBody(this, sx / sd, sz / sd, dt);
+              st *= 0.45; mx *= 0.45; mz *= 0.45;
+            } else {
+              // 少し向きを変えて回り込めるか
+              let ok = false;
+              for (const ang of [0.5, -0.5, 1.0, -1.0, 1.5, -1.5]) {
+                const c = Math.cos(ang), sn = Math.sin(ang), rx = mx * c - mz * sn, rz = mx * sn + mz * c;
+                const dd2 = g.bodyContact(this.pos.x + rx, this.pos.z + rz, this.pos.y);
+                if (dd2 <= 0 || dd2 < cur - 1e-4) { mx = rx; mz = rz; ok = true; break; }
+              }
+              if (!ok) {
+                // 目的地がドミノのすぐそば（拾う・起こす）：手が届くのでここで着いたことにする
+                if (d < 1.0) { this.arriveDist = 0; const cb = this.onArrive; this.onArrive = null; this.runMult = 1; if (this.pf) this.pf.reset(); if (cb) cb(); else this.state = 'idle'; break; }
+                this.stall(dt, d); if (this.pf) this.pf.reset(); break;
+              }
+            }
           }
-          this.wasCrossing = crossing;
-          if (crossing && this.crossBump) { g.bumpDominoes(this, sx / sd, sz / sd, true); }
-          if (!crossing) this.crossBump = false;
-          const st = Math.min(step * (crossing ? 0.4 : 1), sd);
-          this.pos.x += (sx / sd) * st; this.pos.z += (sz / sd) * st;
-          if (this.direct) g.bumpDominoes && g.bumpDominoes(this, sx / sd, sz / sd);
+          this.stuckT = 0;
+          this.pos.x += mx; this.pos.z += mz;
+          sx = mx; sz = mz;
           this.turnTo(Math.atan2(sx, sz), dt);
           this.walking = true;
           this.pose = this.load > 0 ? 'carry' : (this.runMult > 1.2 ? 'run' : 'walk');
@@ -643,8 +713,13 @@ export class Gnome {
       case 'flee': {
         this.timer -= dt;
         const sp = CFG.walkSpeed * 1.9 * dt;
+        // 慌てて逃げる：ドミノがあれば少し向きを変えてよける。よけられない時だけ体で押してしまう（当たったときだけ）
+        if (g.bodyContact(this.pos.x + this.fleeDir.x * sp, this.pos.z + this.fleeDir.z * sp, this.pos.y) > 0) {
+          let ok = false;
+          for (const a of [0.6, -0.6, 1.2, -1.2]) { const c = Math.cos(a), sn = Math.sin(a), fx = this.fleeDir.x * c - this.fleeDir.z * sn, fz = this.fleeDir.x * sn + this.fleeDir.z * c; if (g.bodyContact(this.pos.x + fx * sp, this.pos.z + fz * sp, this.pos.y) <= 0) { this.fleeDir.set(fx, 0, fz); ok = true; break; } }
+          if (!ok) g.pushByBody(this, this.fleeDir.x, this.fleeDir.z, dt);
+        }
         this.pos.x += this.fleeDir.x * sp; this.pos.z += this.fleeDir.z * sp;
-        if (g.bumpDominoes) g.bumpDominoes(this, this.fleeDir.x, this.fleeDir.z); // 慌てて逃げるとぶつかることも
         g.clampToStage(this.pos);
         this.turnTo(Math.atan2(this.fleeDir.x, this.fleeDir.z), dt * 2);
         this.walking = true;
@@ -653,7 +728,7 @@ export class Gnome {
       }
     }
     // 床の高さ（歩道橋の上ならその高さ）
-    this.pos.y = Math.max(g.stage.heightAt(this.pos.x, this.pos.z), g.bridgeHeight ? g.bridgeHeight(this.pos.x, this.pos.z) : 0);
+    this.pos.y = Math.max(g.stage.heightAt(this.pos.x, this.pos.z), g.bridgeHeight ? g.bridgeHeight(this.pos.x, this.pos.z) : 0) + (this.liftY || 0);
     this.animate(dt);
   }
 
@@ -678,6 +753,8 @@ export class Gnome {
       case 'walk': legA = s * 0.7; armL = -s * 0.6; armR = s * 0.6; bob = Math.abs(s) * 0.05; break;
       case 'run': legA = s * 1.0; armL = -s * 1.0; armR = s * 1.0; bob = Math.abs(s) * 0.09; lean = 0.25; break;
       case 'carry': legA = s * 0.6; armL = armR = -1.25; bob = Math.abs(s) * 0.04; break;
+      case 'liftbox': { const k = Math.min(1, this.poseT * 1.6); armL = armR = -1.4 - 0.35 * k; lean = 0.25 * (1 - k); bob = -0.06 * (1 - k); spread = -0.15; break; }
+      case 'carrybox': legA = s * 0.55; armL = armR = -1.75; bob = Math.abs(s) * 0.03; spread = -0.15; break;
       case 'place': { const k = Math.sin(Math.min(1, this.poseT * this.speed / CFG.placeTime) * Math.PI); lean = 0.75 * k; armL = armR = -1.25 + 0.75 * k; break; }
       case 'pick': { const k = Math.sin(Math.min(1, this.poseT * 2.5) * Math.PI); lean = 0.8 * k; armL = armR = -0.6 * k - 0.2; break; }
       case 'kneel': { const k = Math.min(1, this.poseT * 4); lean = 0.6 * k; bob = -0.12 * k; legA = 0.9 * k; armL = armR = -1.0; break; }
@@ -707,6 +784,12 @@ export class Gnome {
       case 'oops': armL = armR = -2.9; spread = 0.5; bob = Math.abs(Math.sin(this.poseT * 18)) * 0.08; break;
       case 'shrug': armL = armR = -0.4; spread = 0.9 * Math.abs(Math.sin(this.poseT * 3)); break;
       case 'cheer': armL = armR = -2.7; spread = 0.2; bob = Math.abs(Math.sin(this.poseT * 9)) * 0.3; break;
+      case 'wave': armR = -2.6 + Math.sin(this.poseT * 10) * 0.35; armRz = 0.5; armL = -0.1; break;
+      case 'talk': armR = -0.9 + Math.sin(this.poseT * 5) * 0.4; armL = -0.4; bob = Math.abs(Math.sin(this.poseT * 7)) * 0.02 - 0.3; legA = -1.45; break;
+      case 'throw': { const k = Math.min(1, this.poseT / 0.4); armR = k < 0.6 ? -2.8 * (k / 0.6) : -2.8 + (k - 0.6) * 5; lean = (k - 0.5) * 0.4; break; }
+      case 'ready': armL = armR = -1.3; spread = 0.25; lean = 0.15; bob = -0.05; break;
+      case 'catch': { const k = Math.max(0, 1 - this.poseT * 2.5); armL = armR = -1.5 - 0.3 * k; spread = 0.1; lean = -0.15 * k; break; }
+      case 'shake': armL = armR = -1.4 + Math.sin(this.poseT * 18) * 0.3; lean = 0.35; break;
       case 'alarm': armL = -2.8 + Math.sin(this.poseT * 14) * 0.5; armR = -2.8 - Math.sin(this.poseT * 14) * 0.5; spread = 0.3; break;
       default: armL = armR = Math.sin(this.phase * 0.7) * 0.08; bob = Math.sin(this.phase) * 0.01;
     }

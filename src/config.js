@@ -27,6 +27,7 @@ export const CFG = {
 
   // 小人
   walkSpeed: 3.4,
+  gnomeR: 0.25, // 小人の体の半径（肩幅0.5）。ドミノどうしのすき間（0.6−0.15＝0.45）より太いので、列の間は通れない
   placeTime: 0.5,
   pickTime: 0.3,
   restandTime: 0.45,

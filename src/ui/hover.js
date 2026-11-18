@@ -5,9 +5,9 @@ import { PARTS, EVOLUTIONS } from '../data/parts.js';
  * カーソルの先にある 3D のもの（手前優先）の情報を、実際のゲームデータから作る。
  * 返り値：{ title, rows: [[ラベル, 値]], note, warn } または null
  */
-const ROLE_ICON = { builder: '👷', carrier: '📦', collector: '🧺', stopperCrew: '🦺', restorer: '🚑', guard: '👮', soldier: '💂', chief: '🧑‍💼', architect: '📐', wrecker: '⛏', railcrew: '🔧' };
-const ROLE_NAME = { chief: '設計主任', wrecker: '撤去班', railcrew: 'ぽっぽ線の保線係' };
-const ROLE_NOTE = { chief: '現場監督（あなた）の参謀。建設が線路にぶつかると現場を確認し、エリート建築士に立体交差を指示するか、撤去班に線路の撤去を頼む', wrecker: '設計主任の指示で、ドミノのじゃまになる青い線路を取り外す', railcrew: 'おもちゃの鉄道の人。本番が終わると、外された線路を元に戻しに来る' };
+const ROLE_ICON = { builder: '👷', carrier: '📦', collector: '🧺', stopperCrew: '🦺', restorer: '🚑', guard: '👮', soldier: '💂', chief: '🧑‍💼', architect: '📐', wrecker: '⛏', railcrew: '🔧', railchief: '🚉' };
+const ROLE_NAME = { chief: '設計主任', wrecker: '撤去班', railcrew: 'ぽっぽ線の保線係', railchief: 'ぽっぽ線の保線主任' };
+const ROLE_NOTE = { chief: '現場監督（あなた）の参謀。建設が線路にぶつかると現場を確認し、エリート建築士に立体交差を指示するか、撤去班に線路の撤去を頼む', wrecker: '設計主任の指示で、ドミノのじゃまになる青い線路を取り外す', railcrew: 'おもちゃの鉄道の人。支線のレールを1本ずつ敷く。本番が終わると、外された本線のレールを元に戻しに来る', railchief: 'ぽっぽ線の計画係。「この駅まで線路をつなげたい」と支線を計画し、保線係に工事を指示する。ドミノとぶつかると設計主任と話し合う' };
 const STATE_TEXT = {
   walk: '移動中', flee: '避難中！', trip: '転んでいる…',
   act: { place: 'ドミノを設置中', pick: '拾う・立て直し中', kneel: 'ストッパー設置中', salute: '待機（敬礼）', idle: '待機中', cheer: '大喜び！', surprised: 'びっくり！', oops: 'あっ！（事故）', shrug: '在庫切れで待機', alarm: '警報！', carry: '運搬中' },

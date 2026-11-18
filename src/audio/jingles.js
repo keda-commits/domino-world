@@ -2,7 +2,6 @@
  * 連鎖のあとに鳴る短い音楽（Ver.0.5）
  * - success：途中まででも倒し切ったときの「やった！」（明るく短い。次も倒したくなる）
  * - grand  ：最終ゴール到達の大成功（ファンファーレ。通常成功より明確に格上）
- * - crowd  ：建設中の事故のあとの観客の「おぉ〜……あぁ〜……」（短く、コミカルに）
  * どれも AudioContext とつなぎ先を受け取って音を組み立てる（OfflineAudioContext で書き出して比較できる）。
  */
 
@@ -125,44 +124,3 @@ export const GRAND = {
   },
 };
 
-// ======================= 事故の観客（おぉ〜……あぁ〜……） =======================
-/**
- * 何人分かの「声」：のこぎり波（声帯）を、母音の共鳴（フォルマント）に相当する2つのバンドパスに通す。
- * 「おぉ〜」（F1≈450, F2≈800）で少し上がり、「あぁ〜」（F1≈750, F2≈1150）で下がっていく。
- * size：倒れた枚数。大きな事故ほど人数が増え、最後に低い「ブー」が混ざる
- */
-export function crowd(ctx, dest, t, size = 10) {
-  const voices = Math.min(14, 5 + Math.floor(size / 6));
-  const oohT = 0.55, awwT = 0.95;
-  const out = ctx.createGain(); out.gain.value = 2.0; out.connect(dest); // 書き出して比べると他の曲より10dBほど小さかったので上げる
-  for (let i = 0; i < voices; i++) {
-    const start = t + Math.random() * 0.12;
-    const base = 150 + Math.random() * 130; // 男声〜女声のばらつき
-    const o = ctx.createOscillator(); o.type = 'sawtooth';
-    o.frequency.setValueAtTime(base * 0.92, start);
-    o.frequency.linearRampToValueAtTime(base * 1.12, start + oohT); // おぉ〜（上がる）
-    o.frequency.linearRampToValueAtTime(base * 1.05, start + oohT + 0.12);
-    o.frequency.exponentialRampToValueAtTime(base * 0.7, start + oohT + awwT); // あぁ〜（下がる）
-    const vib = ctx.createOscillator(); vib.frequency.value = 4.5 + Math.random() * 2; const vg = ctx.createGain(); vg.gain.value = base * 0.025; vib.connect(vg).connect(o.frequency);
-    const f1 = ctx.createBiquadFilter(); f1.type = 'bandpass'; f1.Q.value = 5;
-    const f2 = ctx.createBiquadFilter(); f2.type = 'bandpass'; f2.Q.value = 7;
-    f1.frequency.setValueAtTime(450, start); f1.frequency.linearRampToValueAtTime(480, start + oohT); f1.frequency.linearRampToValueAtTime(760, start + oohT + 0.2);
-    f2.frequency.setValueAtTime(800, start); f2.frequency.linearRampToValueAtTime(850, start + oohT); f2.frequency.linearRampToValueAtTime(1150, start + oohT + 0.2);
-    const g = ctx.createGain(); const v = 0.22 / Math.sqrt(voices);
-    g.gain.setValueAtTime(0.0001, start);
-    g.gain.exponentialRampToValueAtTime(v * 0.8, start + 0.12);
-    g.gain.linearRampToValueAtTime(v, start + oohT);
-    g.gain.linearRampToValueAtTime(v * 0.9, start + oohT + 0.3);
-    g.gain.exponentialRampToValueAtTime(0.0001, start + oohT + awwT);
-    const g2 = ctx.createGain(); g2.gain.value = 0.7;
-    o.connect(f1).connect(g); o.connect(f2).connect(g2).connect(g); g.connect(out);
-    o.start(start); vib.start(start); o.stop(start + oohT + awwT + 0.05); vib.stop(start + oohT + awwT + 0.05);
-  }
-  // 息づかい（ざわっ）
-  noise(ctx, out, t, 0.5, 1200, 0.03);
-  if (size >= 40) {
-    // 大事故：最後に短いブーイング
-    for (let i = 0; i < 4; i++) { const st = t + oohT + awwT * 0.55 + i * 0.03; note(ctx, out, st, 110 + i * 9, 0.35, { type: 'sawtooth', vol: 0.03, attack: 0.06, release: 0.15, cutoff: 500 }); }
-  }
-  return oohT + awwT + 0.15;
-}

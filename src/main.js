@@ -404,7 +404,7 @@ function describeEntry(e) {
   const base = e === game.crateEntry ? null : describeAt(game, hand, ray, camera);
   if (base && e.kind !== 'prop') { base.note = [base.note, 'ドラッグで持ち上げて運べる'].filter(Boolean).join('\n'); return base; }
   const crate = e === game.crateEntry;
-  return { title: `✋ ${e.name}`, rows: crate ? [['中身', `${game.crate.count}枚`], ['置き場所', game.crate.pinned ? 'プレイヤーが置いた場所' : '建設の先頭についていく']] : [], note: crate ? '中のドミノをドラッグ：1枚取り出す／縁・旗をドラッグ：箱ごと運ぶ' : 'ドラッグで持ち上げて運べる（離すと落ちる）' };
+  return { title: `✋ ${e.name}`, rows: crate ? [['中身', `${game.crate.count}枚`], ['置き場所', game.crate.haul ? '運搬担当4人で前線へ運んでいるところ' : game.crate.pinned ? 'プレイヤーが置いた場所' : '自分では動かない（運搬担当が4人そろうと担いで前線へ運ぶ）'], ['運搬担当', `${game.workers.count('carrier')}人${game.workers.count('carrier') < 4 ? '（4人で担げる）' : ''}`]] : [], note: crate ? '中のドミノをドラッグ：1枚取り出す／縁・旗をドラッグ：箱ごと運ぶ' : 'ドラッグで持ち上げて運べる（離すと落ちる）' };
 }
 function hoverHeld() {
   hand.highlight(null);
