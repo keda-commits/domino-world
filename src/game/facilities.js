@@ -463,3 +463,43 @@ export class Factory {
     this.items.push({ m, t: 0 });
   }
 }
+
+/**
+ * 前線のドミノの山（Ver.0.6 安定化）：資材箱は4人いないと動かないので、運搬担当が少なくても建設が遠くなりすぎないように、
+ * 運搬担当が倉庫や資材箱からドミノを小分けに運び、建設の先頭のそばに小さな山を作る（建設担当はここからも取れる）。
+ * 何人でも運べる。山が空になってから、次の先頭のそばへ移す（山ごと瞬間移動はしない）。
+ */
+export class SupplyPile {
+  constructor(game) {
+    this.game = game;
+    const g = (this.group = new THREE.Group());
+    const cloth = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.02, 1.2), MAT.fabric('#e9c46a')); cloth.position.y = 0.01; g.add(cloth);
+    this.minis = [];
+    for (let i = 0; i < 12; i++) {
+      const d = new THREE.Mesh(miniGeo, miniMats[i % miniMats.length]);
+      d.rotation.x = Math.PI / 2; d.position.set(-0.5 + (i % 4) * 0.33, 0.06 + Math.floor(i / 4) * 0.16, -0.25 + (Math.floor(i / 4) % 2) * 0.2);
+      d.visible = false; g.add(d); this.minis.push(d);
+    }
+    shadow(g); g.visible = false; game.scene.add(g);
+    this.pos = g.position; this.count = 0; this.active = false; this.cap = 40;
+  }
+  spot(id, out) { const a = (id * 2.399) % (Math.PI * 2); return out.set(this.pos.x + Math.cos(a) * 1.3, 0, this.pos.z + Math.sin(a) * 1.1); }
+  take(n) { const t = Math.min(n, this.count); this.count -= t; return t; }
+  /** 2秒ごと：資材箱が建設の先頭から遠いとき、先頭のそばに山を作る（空になったら次の所へ） */
+  plan() {
+    const g = this.game, head = g.buildHead && g.buildHead();
+    if (!head || g.mode !== 'build') return;
+    const far = (p) => Math.hypot(p.x - head.x, p.z - head.z) > 14;
+    if (!far(g.crate.pos)) { if (this.count === 0) this.active = false; return; }
+    if (this.active && (!far(this.pos) || this.count > 0)) return;
+    const v = g.crate.restSpot(head, new THREE.Vector3());
+    if (!v) return;
+    this.pos.set(v.x, g.stage.heightAt(v.x, v.z), v.z); this.active = true;
+  }
+  update() {
+    this.group.visible = this.active || this.count > 0;
+    const show = Math.min(12, Math.ceil(this.count / 3));
+    for (let i = 0; i < 12; i++) this.minis[i].visible = i < show;
+  }
+  dispose() { this.game.scene.remove(this.group); }
+}

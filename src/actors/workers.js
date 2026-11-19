@@ -367,12 +367,37 @@ export class Gnome {
           this.act(CFG.pickTime / this.speed, 'pick', () => this.think());
         });
       }
+      // 前線の山へ小分けに運ぶ（資材箱が先頭から遠いとき。何人でもできる）：倉庫か資材箱から取ってくる
+      const pl = g.pile, toPile = pl && pl.active && pl.count < pl.cap && g.unbuiltCount() > 0;
+      if (toPile && (g.stock > 0 || g.crate.count > 0)) {
+        let src = null, sd = Infinity;
+        if (g.stock > 0) for (const dp of g.depots) { const dd = dp.pos.distanceTo(pl.pos) + dp.pos.distanceTo(this.pos) * 0.5; if (dd < sd && g.canReach(this, dp.pos)) { sd = dd; src = dp; } }
+        if (g.crate.count > 0) { const dd = g.crate.pos.distanceTo(pl.pos) + g.crate.pos.distanceTo(this.pos) * 0.5; if (dd < sd && g.canReach(this, g.crate.pos)) { sd = dd; src = g.crate; } }
+        if (src) return this.goto(() => src.spot(this.id, tmp), () => {
+          const take = src.take(this.capacity);
+          if (take <= 0) return this.wait(0.5);
+          this.load += take; this._toPile = true;
+          this.act(CFG.pickTime / this.speed, 'pick', () => this.think());
+        });
+      }
       if (g.stock <= 0 || g.crate.count >= g.crate.cap || g.unbuiltCount() === 0) return this.wait(1.0, g.stock <= 0 ? 'shrug' : 'idle');
       const dep = g.nearestDepot(g.crate.pos);
       return this.goto(() => dep.spot(this.id, tmp), () => {
         const take = dep.take(this.capacity);
         if (take <= 0) return this.wait(0.5);
-        this.load += take;
+        this.load += take; this._toPile = false;
+        this.act(CFG.pickTime / this.speed, 'pick', () => this.think());
+      });
+    }
+    // 前線の山へ届ける
+    const pl = g.pile;
+    if (this._toPile && pl && pl.active && g.canReach(this, pl.pos, 6)) {
+      return this.goto(() => pl.spot(this.id + 5, tmp), () => {
+        const put = Math.min(this.load, pl.cap - pl.count);
+        pl.count += put; this.load -= put; this._toPile = false;
+        if (this.load > 0) { g.returnToStock(this.load); this.load = 0; }
+        if (Math.random() < 0.15) this.say(['前線にドミノ、届けたよ！', 'ここに置いとくね〜'][Math.floor(Math.random() * 2)]);
+        g.audio.drop();
         this.act(CFG.pickTime / this.speed, 'pick', () => this.think());
       });
     }
@@ -746,6 +771,16 @@ export class Gnome {
                 const c = Math.cos(ang), sn = Math.sin(ang), rx = mx * c - mz * sn, rz = mx * sn + mz * c;
                 const dd2 = g.bodyContact(this.pos.x + rx, this.pos.z + rz, this.pos.y);
                 if (dd2 <= 0 || dd2 < cur - 1e-4) { mx = rx; mz = rz; ok = true; break; }
+              }
+              if (!ok && cur > 0) {
+                // 体がドミノに少しめり込んでいる（置かれた・押されてきた）：まず、そのドミノから離れる方向へ一歩出る
+                const hits = []; g.bodyContact(this.pos.x, this.pos.z, this.pos.y, hits);
+                if (hits.length) {
+                  const t = hits[0].body.translation(); let ex = this.pos.x - t.x, ez = this.pos.z - t.z; const el = Math.hypot(ex, ez) || 1;
+                  ex /= el; ez /= el;
+                  const e = Math.min(step, cur + 0.03);
+                  if (g.bodyContact(this.pos.x + ex * e, this.pos.z + ez * e, this.pos.y) < cur) { mx = ex * e; mz = ez * e; ok = true; if (g.metrics) g.metrics.count('escape'); }
+                }
               }
               if (!ok) {
                 // 目的地がドミノのすぐそば（拾う・起こす）：手が届くのでここで着いたことにする

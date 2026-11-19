@@ -24,7 +24,7 @@ import { RailPlans } from './railPlan.js';
 import { Metrics } from './metrics.js';
 import { autoConnect, plankMesh } from './chief.js';
 import { Workers } from '../actors/workers.js';
-import { Depot, Crate, Machine, Train, Factory } from './facilities.js';
+import { Depot, Crate, Machine, Train, Factory, SupplyPile } from './facilities.js';
 import { PlanView } from './planView.js';
 import { Progress, xpForRun } from './progress.js';
 import { PARTS, EVOLUTIONS, CATEGORY, DEFENSE } from '../data/parts.js';
@@ -75,6 +75,7 @@ export class Game {
     this.planView = new PlanView(this.scene);
     this.depots = this.def.depots.map((p, i) => new Depot(this, p.x, p.z, i));
     this.crate = new Crate(this);
+    this.pile = new SupplyPile(this);
     this.crate.pos.set(this.def.start.x + 3, 0, this.def.start.z + 3);
     this.machine = new Machine(this);
     this.machine.pos.set(this.depots[0].pos.x + 3, 0, this.depots[0].pos.z + 3);
@@ -435,6 +436,7 @@ export class Game {
     for (const m of this.markers) { if (m.mesh) this.scene.remove(m.mesh); m.orbs.forEach((o) => this.scene.remove(o.mesh)); }
     for (const c of this.chests) this.scene.remove(c.mesh);
     this.scene.remove(this.gachaMachine.mesh, this.finalChest.mesh, this.startPad, this.crate.group, this.machine.group, this.train.mesh, this.factory.group);
+    if (this.pile) this.pile.dispose();
     if (this.piggy) this.scene.remove(this.piggy.mesh);
     if (this.tower) this.scene.remove(this.tower);
     if (this.hq) this.scene.remove(this.hq);
@@ -759,6 +761,12 @@ export class Game {
   /** 小人がそこへ歩いて行けるか（列の向こう側なら false） */
   canReach(gnome, p, rb = 12) { return !this.nav || !this.nav.version || this.nav.reachable(gnome.pos, p, rb); }
   supplyFor(gnome) {
+    // Ver.0.6：前線のドミノの山（運搬担当が小分けに運んだもの）が近くにあれば、そこから
+    const pl = this.pile;
+    if (pl && pl.count > 0 && this.canReach(gnome, pl.pos, 6)) {
+      const dp = pl.pos.distanceTo(gnome.pos);
+      if (dp < this.crate.pos.distanceTo(gnome.pos) || this.crate.count <= 0) { let nd2 = Infinity; for (const d of this.depots) nd2 = Math.min(nd2, d.pos.distanceTo(gnome.pos)); if (dp < nd2 + 6 || this.stock <= 0) return pl; }
+    }
     // Ver.0.6：歩いて行ける所だけ（列の向こうの資材箱・倉庫は使えない）
     const crateOk = this.crate.count > 0 && this.canReach(gnome, this.crate.pos);
     let near = null, nd = Infinity;
@@ -1975,6 +1983,7 @@ export class Game {
     this.updateAlarm(dt);
     this.workers.update(dt);
     this.crate.update(dt);
+    if (this.pile) { if ((this._pileT = (this._pileT ?? 1) - dt) <= 0) { this._pileT = 2; this.pile.plan(); } this.pile.update(); }
     if (!this.machine.carried) this.machine.update(dt);
     if (!this.train.carried) this.train.update(dt);
     this.factory.update(dt);
@@ -2063,7 +2072,7 @@ export class Game {
       gachaUsed: this.gachaMachine.used,
       finalChest: this.finalChest.opened,
       // 在庫（資材箱の中身は grab.crate に別に保存。二重計上しない）
-      stock: this.stock + this.machine.hopper + this.workers.inHands() + this.train.load + (this.roomba ? this.roomba.bin : 0) + (this.factory ? this.factory.box : 0),
+      stock: this.stock + (this.pile ? this.pile.count : 0) + this.machine.hopper + this.workers.inHands() + this.train.load + (this.roomba ? this.roomba.bin : 0) + (this.factory ? this.factory.box : 0),
       grab: this.serializeGrab(),
       pieceSeq: this.pieceSeq || 0,
     };
