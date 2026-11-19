@@ -21,7 +21,8 @@ import { NavGrid } from './nav.js';
 import { campVillage, StorageShelf, ROLE_CAMP, SMALL_PARTS } from '../world/camps.js';
 import { CampLife } from './campLife.js';
 import { RailPlans } from './railPlan.js';
-import { autoConnect } from './chief.js';
+import { Metrics } from './metrics.js';
+import { autoConnect, plankMesh } from './chief.js';
 import { Workers } from '../actors/workers.js';
 import { Depot, Crate, Machine, Train, Factory } from './facilities.js';
 import { PlanView } from './planView.js';
@@ -95,6 +96,7 @@ export class Game {
     const fp = fs ? new THREE.Vector3(fs.x, 0, fs.z) : camps.machines ? new THREE.Vector3(camps.machines.x, 0, camps.machines.z) : this.depots[0].pos.clone().add(new THREE.Vector3(6, 0, 3));
     this.factory = new Factory(this, fp);
     this.workers = new Workers(this);
+    this.metrics = new Metrics(this);
     this.stoppers = [];
     this.pieces = []; // ポート付き（course.pieces と共有）
     this.placed = []; // バリケード・センサー・ベル {type,x,z,yaw,mesh,slot?}
@@ -170,7 +172,7 @@ export class Game {
     if (data) this.applyGrabSave(data);
     // 経路探索のグリッド（家具・小物・ドミノ）。歩道橋は通路として登録
     this.nav = new NavGrid(this);
-    for (const p of this.placed) if (p.type === 'footbridge') this.nav.addBridge(p.a, p.b);
+    for (const p of this.placed) if (p.type === 'footbridge' || p.type === 'plank') this.nav.addBridge(p.a, p.b);
     // ゲーム開始：建設開始地点近くの資材箱にドミノ50個（在庫から「移す」ので総数は増えない）。
     // 資材箱の中身を保存しているセーブ（grab.crate）では保存された数をそのまま使う（再読み込みで増えない）
     // Ver.0.5.2：補充漏れ（Ver.0.5 の不具合）で空のまま保存された資材箱も、一度だけ在庫から移す（最大50枚。総数は変わらない）。
@@ -255,14 +257,28 @@ export class Game {
     }
     if (!w._bumpSay || this.time - w._bumpSay > 3) { w._bumpSay = this.time; w.say('あっ、ぶつかった！', 'warn'); }
   }
+  /** 作業員が組み立て終えた通路を置く（踏み板＝基本の通路／歩道橋＝エリート建築士）。プレイヤーの歩道橋の数には含めない */
+  addWalkway(kind, x, z, yaw) {
+    if (kind === 'footbridge') { const p = this.placePiece('footbridge', x, z, yaw, true, true); if (p) p.auto = true; return p; }
+    const L = 5.4, H = 1.3, mesh = plankMesh(L, H);
+    mesh.position.set(x, 0, z); mesh.rotation.y = yaw; this.scene.add(mesh);
+    const ax = Math.cos(yaw), az = -Math.sin(yaw);
+    const p = { type: 'plank', x, z, yaw, mesh, slot: null, auto: true, len: L, height: H };
+    p.a = new THREE.Vector3(x - ax * L / 2, 0, z - az * L / 2); p.b = new THREE.Vector3(x + ax * L / 2, 0, z + az * L / 2);
+    if (this.nav) this.nav.addBridge(p.a, p.b);
+    this.placed.push(p);
+    this.navDirty = true;
+    return p;
+  }
   /** 歩道橋の上なら、その高さ（橋の中央が一番高いアーチ） */
   bridgeHeight(x, z) {
     for (const p of this.placed) {
-      if (p.type !== 'footbridge') continue;
+      if (p.type !== 'footbridge' && p.type !== 'plank') continue;
       const ab = p.b.clone().sub(p.a), len = ab.length(); ab.divideScalar(len);
       const rx = x - p.a.x, rz = z - p.a.z;
       const along = rx * ab.x + rz * ab.z, side = Math.abs(-rx * ab.z + rz * ab.x);
       if (along < 0 || along > len || side > 0.8) continue;
+      if (p.type === 'plank') return p.height * Math.max(0, Math.min(1, Math.min(along, len - along) / 1.0)); // 両端は坂、まん中は平ら
       return Math.sin((along / len) * Math.PI) * p.height;
     }
     return 0;
@@ -410,6 +426,8 @@ export class Game {
     for (const p of this.pieces) p.dispose();
     for (const s of this.stoppers) s.dispose();
     for (const p of this.placed) this.scene.remove(p.mesh);
+    for (const j of this.walkJobs || []) if (j.ghost) this.scene.remove(j.ghost);
+    this.walkJobs = [];
     for (const b of this.tempBarricades) this.scene.remove(b.mesh);
     this.goal.dispose();
     for (const cp of this.checkpoints || []) cp.dispose();
@@ -709,19 +727,24 @@ export class Game {
   findBuildJob(gnome) {
     if (this.mode !== 'build') return null;
     const list = this.unbuiltList();
-    let best = null, bd = Infinity, k = 0;
+    // Ver.0.6 安定化：行けるマスを30件まで比べる（行けないマスは数えずに飛ばす。ただし調べるのは先頭から150件まで）。
+    // この人が少し前にたどり着けなかったマスは、しばらく別の人にまかせる
+    let best = null, bd = Infinity, k = 0, scanned = 0;
     for (const s of list) {
+      if (++scanned > 150) break;
       if (s.domino || s.claim || this.crossBlocked(s) || this.slotBlocker(s)) continue;
-      // Ver.0.6：列はまたげないので、歩いて行ける側があるマスだけ（行けない側なら反対側から）
+      if (s._failBy && s._failBy[gnome.id] > this.time) continue;
       const side = this.reachSide(s, gnome);
-      if (!side) { if (++k > 14) break; continue; } // 行けないマスも数える（遠くの離れた所まで探しに行かない）
+      if (!side) continue;
       const d = (s.x - gnome.pos.x) ** 2 + (s.z - gnome.pos.z) ** 2 + k * 4;
       if (d < bd) { bd = d; best = s; best._side = side; }
-      if (++k > 14) break;
+      if (++k >= 30) break;
     }
     if (best) { best.claim = gnome.id; gnome.side = best._side; }
     return best;
   }
+  /** この人はこの仕事（マス・ドミノ）にたどり着けなかった：しばらく別の人にまかせる */
+  markJobFail(job, gnome, sec = 30) { if (job) (job._failBy ||= {})[gnome.id] = this.time + sec; }
   /** マスの左右どちらかに歩いて行けるか（行ける側の符号つき距離。どちらも無理なら 0） */
   reachSide(slot, gnome) {
     if (!this.nav || !this.nav.version) return gnome.side;
@@ -743,6 +766,7 @@ export class Game {
     if (crateOk && (!near || this.crate.pos.distanceTo(gnome.pos) < near.pos.distanceTo(gnome.pos) + 12)) return this.crate;
     if (near) return near;
     if (crateOk) return this.crate;
+    if (this.metrics && (this.stock > 0 || this.crate.count > 0)) this.metrics.count('supplyFail');
     return null;
   }
   nearestDepot(pos) {
@@ -787,7 +811,7 @@ export class Game {
     const kind = slot.kind === 'wide' ? 'wide' : slot.special ? slot.special.type : 'normal';
     const d = this.dominoes.create(slot, { slot, kind, drop: true, colorIndex: Math.floor(Math.max(0, slot.order) / 4) });
     if (!d) { this.stock++; return null; }
-    slot.domino = d; slot.claim = 0;
+    slot.domino = d; slot.claim = 0; d._bornT = this.time;
     this.stats.placed++;
     this.unbuiltDirty = true;
     if (!this._lastPlaceSnd || this.time - this._lastPlaceSnd > 0.06) { this.audio.place(); this._lastPlaceSnd = this.time; }
@@ -799,7 +823,7 @@ export class Game {
         setTimeout(() => {
           if (d.removed || d.toppled) return;
           this.dominoes.push(d, Math.sin(slot.yaw) * dir, Math.cos(slot.yaw) * dir, 0.07);
-          d.accident = true;
+          d.accident = true; d._oops = this.time;
           this.stats.accidents++;
           gnome.oops();
           this.audio.oops();
@@ -883,12 +907,15 @@ export class Game {
       if (duringRun && (d.slot.order < minOrder || this.run.toppled.has(d))) continue;
       if (!this.isStill(d)) continue; // 倒れている最中は待つ（寄りかかって止まったものは対象）
       if (d.restandFailAt && this.time - d.restandFailAt < 4) continue; // さっき起こせなかったもの（同じ所で足踏みしない）
+      if (d._failBy && d._failBy[gnome.id] > this.time) continue; // この人がたどり着けなかったもの
       const t = d.body.translation();
       const dist2s = (t.x - d.slot.x) ** 2 + (t.z - d.slot.z) ** 2;
       if (dist2s > CFG.restandDistance ** 2) continue;
       let dd = (t.x - gnome.pos.x) ** 2 + (t.z - gnome.pos.z) ** 2;
       if (preferAccident && d.accident) dd *= 0.3;
-      dd += Math.max(0, d.slot.order) * 0.02;
+      // 大事故の立て直し中：連鎖をさえぎっている手前のものから（順番を強く重視。近さは少しだけ）
+      if (this.recovery) dd = dd * 0.15 + Math.max(0, d.slot.order - this.recovery.from) * 1.5;
+      else dd += Math.max(0, d.slot.order) * 0.02;
       // 重なりの確認は、いまの候補より近いものだけ（重い判定を全ドミノに対してしない）
       if (dd < bd && !covered(d)) {
         // Ver.0.6：列の向こう側（歩いて行けない所）のドミノは、行ける人にまかせる
@@ -929,8 +956,9 @@ export class Game {
     const kind = slot.kind === 'wide' ? 'wide' : slot.special ? slot.special.type : 'normal';
     const color = d.color;
     this.dominoes.remove(d);
+    if (this.metrics) { this.metrics.count('restands'); if (d._fellT != null && this.mode === 'build') this.metrics.push(this.metrics.repair, this.time - d._fellT); }
     const nd = this.dominoes.create(slot, { slot, kind, color, drop: true });
-    slot.domino = nd;
+    slot.domino = nd; nd._bornT = this.time; nd._restood = true;
     this.stats.restands++;
     if (!this._lastRestSnd || this.time - this._lastRestSnd > 0.07) { this.audio.place(); this._lastRestSnd = this.time; }
     return nd;
@@ -953,7 +981,9 @@ export class Game {
       if (d.releasedAt != null && this.time - d.releasedAt < 12) continue; // 手で置いたばかりのものは少し待つ
       const t = d.body.translation();
       if (d.slot && (t.x - d.slot.x) ** 2 + (t.z - d.slot.z) ** 2 <= CFG.restandDistance ** 2) continue; // 自分のマスの近く → 立て直しで直る
-      if (!this.blocksASlot(d)) continue;
+      // マスから遠くへ飛ばされたドミノは、起こせない：拾って片付ける（マスは空きになり、建設担当が置き直す）
+      if (!(d.slot && d.toppled) && !this.blocksASlot(d)) continue;
+      if (d._failBy && d._failBy[gnome.id] > this.time) continue;
       const dd = (t.x - gnome.pos.x) ** 2 + (t.z - gnome.pos.z) ** 2;
       if (dd < bd && this.canReach(gnome, t, 3)) { bd = dd; best = d; }
     }
@@ -1422,9 +1452,61 @@ export class Game {
       if ((t.x - r.pos.x) ** 2 + (t.z - r.pos.z) ** 2 < (r.r + 1.6) ** 2) { d.byRoomba = true; this.stats.roombaKnocks++; }
     }
     if (this.mode === 'run' || this.mode === 'test') this.runTopple(d);
-    else if (d.slot) { d.accident = true; this.onAccidentTopple(d); this.countAccident(d); }
+    else if (d.slot) {
+      d.accident = true; d._fellT = this.time;
+      if (this.metrics) {
+        // 倒れた理由（計測用）
+        const T = this.time, sl = d.slot, seg = sl.seg && sl.seg.slots;
+        const nb = seg ? [seg[sl.i - 1], seg[sl.i + 1]].some((q) => q && q.domino && q.domino !== d && q.domino._fellT != null && T - q.domino._fellT < 1.5) : false;
+        const tt = d.body.translation();
+        const nearThreat = (this.threats || []).some((th) => { const q = th.pos || (th.mesh && th.mesh.position) || (th.group && th.group.position); return q && (q.x - tt.x) ** 2 + (q.z - tt.z) ** 2 < 3.5 * 3.5; });
+        const cause = d.byRoomba ? 'roomba' : nearThreat ? 'threat' : d._bodyHit && T - d._bodyHit < 2 ? 'gnome' : d._oops && T - d._oops < 3 ? 'oops' : nb ? 'cascade' : d._bornT != null && T - d._bornT < 4 ? (d._restood ? 'afterRestand' : 'afterPlace') : 'other';
+        this.metrics.count('topples'); this.metrics.add((this.metrics.cause ||= {}), cause, 1);
+      }
+      this.onAccidentTopple(d); this.countAccident(d);
+    }
   }
 
+  /**
+   * 大事故の立て直し（Ver.0.6 安定化）：倒れたままのドミノが多い（25枚以上）と「立て直し中」になる。
+   * 設計主任（いなければ建設担当の先輩）が声をかけ、建設担当も一時的に立て直しへ回る。手前（連鎖をさえぎる所）から順に、分担して起こす。
+   * 遊んでいた人もすぐ戻る。5枚以下になったら終わり
+   */
+  updateRecovery() {
+    let fallen = 0, from = Infinity, oldest = 0;
+    for (const d of this.dominoes.list) {
+      if (!d.slot || d.held || d.removed) continue;
+      if (d.toppled || !this.dominoes.isStandingAt(d, d.slot)) {
+        fallen++; if (d.slot.order >= 0 && d.slot.order < from) from = d.slot.order;
+        if (!d.claim) { if (d._waitT == null) d._waitT = this.time; oldest = Math.max(oldest, this.time - d._waitT); } else d._waitT = null;
+      }
+    }
+    // 大事故（25枚以上）か、だれも起こしに来ないまま長く放置されている（8枚以上・45秒以上）とき
+    if (!this.recovery && this.time > (this._recCool || 0) && (fallen >= 25 || (fallen >= 8 && oldest > 45))) {
+      this.recovery = { t: this.time, n0: fallen, from: from === Infinity ? 0 : from, small: fallen < 25, helpers: new Set() };
+      // 手伝う建設担当：大事故なら全員、小さな放置なら、いちばん近い1人だけ（ほかの人は建設を続ける）
+      const builders = this.workers.list.filter((w) => w.role === 'builder');
+      if (fallen >= 25) builders.forEach((w) => this.recovery.helpers.add(w.id));
+      else { const fs = this.course.allSlots.find((q) => q.order === this.recovery.from); if (fs && builders.length) { builders.sort((a, b) => Math.hypot(a.pos.x - fs.x, a.pos.z - fs.z) - Math.hypot(b.pos.x - fs.x, b.pos.z - fs.z)); this.recovery.helpers.add(builders[0].id); } }
+      this.stats.recoveries = (this.stats.recoveries || 0) + 1;
+      const lead = this.workers.list.find((w) => w.role === 'chief') || this.workers.list.find((w) => w.role === 'restorer') || this.workers.list.find((w) => w.role === 'builder');
+      if (lead) lead.say(fallen >= 25 ? (lead.role === 'chief' ? `大事故だ！ ${fallen}枚倒れた。建設班も立て直しに回ってくれ！` : `${fallen}枚も倒れた！ みんなで立て直そう！`) : (lead.role === 'chief' ? '倒れたままのドミノがあるな。手の空いた人、起こしてくれ！' : '倒れたままのがある、起こしに行こう！'), 'warn');
+      const helpers = this.workers.list.filter((w) => ['builder', 'collector', 'restorer'].includes(w.role) && w !== lead).slice(0, 3);
+      helpers.forEach((w, i) => this.campLife && this.campLife.after(0.7 + i * 0.4, () => w.say(['了解、起こしに行きます！', 'まかせて！', '手前から順に起こそう！'][i])));
+    } else if (this.recovery) {
+      this.recovery.from = from === Infinity ? this.recovery.from : from;
+      // 終わり：ほぼ起こし終えた／長くかかりすぎた（小さな放置は90秒、大事故は5分で、いったん建設に戻る）
+      if (fallen <= (this.recovery.small ? 2 : 5) || this.time - this.recovery.t > (this.recovery.small ? 90 : 300)) {
+        this._recCool = this.time + 30;
+        const dur = this.time - this.recovery.t, done = fallen <= (this.recovery.small ? 2 : 5);
+        if (this.metrics) this.metrics.push((this.metrics.recoveryTimes ||= []), dur);
+        const big = !this.recovery.small;
+        this.recovery = null;
+        const lead = this.workers.list.find((w) => w.role === 'chief') || this.workers.list.find((w) => w.role === 'builder');
+        if (lead && big) lead.say(done ? '立て直し完了！ 建設再開だ！' : '残りは回収班にまかせて、建設に戻ろう！', 'coin');
+      }
+    }
+  }
   /** 建設中の事故：倒れた枚数を数える（観客の声や「ブー！」表示は出さない。知らせるのはドミノが倒れる物理音だけ） */
   countAccident(d) {
     const ep = (this.accEp ||= { n: 0, last: 0, x: 0, z: 0 });
@@ -1878,10 +1960,12 @@ export class Game {
     // 列で囲まれて行けない仕事があれば、歩道橋を架ける（8秒ごと）
     if (this.mode === 'build' && (this._connT = (this._connT ?? 4) - dt) <= 0) { this._connT = 8; autoConnect(this); }
     if (this.growMeshes && this.growMeshes.length) for (const m of [...this.growMeshes]) { m.scale.y = Math.min(1, m.scale.y + dt * 1.2); if (m.scale.y >= 1) this.growMeshes.splice(this.growMeshes.indexOf(m), 1); }
+    if (this.metrics && this.mode === 'build') this.metrics.tick(dt);
+    if (this.mode === 'build' && (this._recT = (this._recT ?? 2) - dt) <= 0) { this._recT = 2; this.updateRecovery(); }
     this.updateTutorial();
     this.updateAccidentReaction();
     if (this.nav) this.nav.budget = 3; // 経路探索はフレームごとに最大3件
-    if (this.nav) { if (this.navDirty) { this.navDirty = false; this.nav.buildStatic(); for (const p of this.placed) if (p.type === 'footbridge') this.nav.addBridge(p.a, p.b); } this.nav.refresh(this.time); }
+    if (this.nav) { if (this.navDirty) { this.navDirty = false; this.nav.buildStatic(); for (const p of this.placed) if (p.type === 'footbridge' || p.type === 'plank') this.nav.addBridge(p.a, p.b); } this.nav.refresh(this.time); }
     this.updateThrows(dt);
     this.updateAlarm(dt);
     this.workers.update(dt);
@@ -2025,7 +2109,7 @@ export class Game {
       } else this.dominoes.create({ x, y: 0, z, yaw: Math.random() * 6 }, { lying: true, frozen: true });
       used++;
     }
-    for (const p of d.placed || []) { const q = this.placePiece(p.type, p.x, p.z, p.yaw, true, !!p.auto); if (q && p.auto) q.auto = true; }
+    for (const p of d.placed || []) { if (p.type === 'plank') { this.addWalkway('plank', p.x, p.z, p.yaw); continue; } const q = this.placePiece(p.type, p.x, p.z, p.yaw, true, !!p.auto); if (q && p.auto) q.auto = true; }
     for (const st of d.stoppers || []) {
       const a = byKey.get(st[0]), b = byKey.get(st[1]);
       if (a && b) { const s = this.installStopper(a, b, !!st[3]); if (s && st[2]) s.setLocked(true); }

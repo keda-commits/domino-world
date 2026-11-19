@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { MAT, rbox, shadow } from '../world/props.js';
+import { footbridgeMesh } from '../world/devices.js';
 
 /**
  * 設計主任の日常（Ver.0.6）
@@ -102,79 +104,105 @@ export function chiefRoutine(w, g) {
 export function setTimeoutGame(g, sec, fn) { if (g.campLife) g.campLife.after(sec, fn); else fn(); }
 
 /**
- * 仮設の歩道橋（Ver.0.6）：ドミノの列は通れないので、コースが長くなると部屋がいくつもの「区画」に分かれ、
- * 小人がたどり着けない仕事（未建設のマス・倒れたドミノ・階段・線路の工事・資材）が出てくる。
- * 8秒ごとに調べ、みんなのいる区画から仕事のある区画へ、設計主任の指示で歩道橋を架ける（1回に1本、ステージで14本まで）。
+ * 通路の確保（Ver.0.6 安定化）
+ * ドミノの列は通れないので、コースが長くなると部屋が「区画」に分かれ、小人がたどり着けない仕事が出ることがある。
+ *  ・踏み板（基本の通路）：たどり着けない仕事があるときだけ、設計主任（いなければ建設担当）が決めて、建設担当が実際に組み立てる。
+ *    低い木の板と小さな坂。ステージで6本まで。ふつうに回りこめる所には作らない
+ *  ・歩道橋（エリート建築士 Lv.1 以上の技術）：遠回りがひどい所に、建築士が実際に架ける。ステージで4本まで
+ * どちらも「突然現れる」のではなく、作業員が現場で組み立てる間に少しずつできていく。
  */
+const PLANK_L = 5.4, PLANK_H = 1.3;
+
+export function plankMesh(L = PLANK_L, H = PLANK_H) {
+  const g = new THREE.Group();
+  const wood = MAT.wood('#d8a86a'), dark = MAT.wood('#9c6b3a');
+  const top = new THREE.Mesh(rbox(L - 2.0, 0.1, 0.9, 0.03), wood); top.position.y = H; g.add(top);
+  for (const sx of [-1, 1]) {
+    const ramp = new THREE.Mesh(rbox(Math.hypot(1.0, H), 0.08, 0.9, 0.03), wood);
+    ramp.position.set(sx * (L / 2 - 0.5), H / 2, 0); ramp.rotation.z = -sx * Math.atan2(H, 1.0); g.add(ramp);
+    for (let k = 0; k < 3; k++) { const b = new THREE.Mesh(rbox(0.35, H / 3 - 0.02, 0.8, 0.04), dark); b.position.set(sx * 1.15, (k + 0.5) * (H / 3), 0); g.add(b); } // 積み木の脚（列の外側）
+    for (let k = 0; k < 4; k++) { const c = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.03, 0.9), dark); c.position.set(sx * (L / 2 - 0.2 - k * 0.22), (H * (k + 0.6)) / 4, 0); g.add(c); } // 坂のすべり止め
+  }
+  return shadow(g);
+}
+/** 通路を置けるか（両端が床の上で、ドミノ・線路・家具・ほかの通路と重ならない） */
+export function canPlaceWalkway(g, x, z, yaw, L = PLANK_L) {
+  const ax = Math.cos(yaw), az = -Math.sin(yaw);
+  for (const t of [-L / 2, -L / 2 + 0.6, L / 2 - 0.6, L / 2]) {
+    const px = x + ax * t, pz = z + az * t;
+    if (!g.stage.inBounds(px, pz, 0.4) || g.stage.blocked(px, pz, 0.3, false, true)) return false;
+    if (g.railway && g.railway.track.onTrack(px, pz, 0.3)) return false;
+    for (const d of g.dominoes.near(px, pz)) { const tt = d.body.translation(); if ((tt.x - px) ** 2 + (tt.z - pz) ** 2 < 0.8 * 0.8) return false; }
+  }
+  if (g.placed.some((p) => (p.type === 'plank' || p.type === 'footbridge') && Math.hypot(p.x - x, p.z - z) < 4)) return false;
+  return true;
+}
+
+/** 区画の番号（その点の近くの通れるマス） */
+function regionAt(N, p, r = 3) { const k = N.nearestFree(p, 0, r); return k < 0 ? 0 : N.region[k]; }
+
+/** 8秒ごと：たどり着けない仕事があれば踏み板を、遠回りがひどければ（建築士がいれば）歩道橋を注文する */
 export function autoConnect(g) {
   const N = g.nav; if (!N || !N.version || g.mode !== 'build') return false;
-  const made = g.placed.filter((p) => p.auto).length;
-  if (made >= 24) return false;
-  const reg = (p, r = 3) => { const k = N.nearestFree(p, 0, r); return k < 0 ? 0 : N.region[k]; };
+  if ((g.walkJobs || []).some((j) => !j.done)) return false; // 注文は1件ずつ
   const V3 = (x, z) => new THREE.Vector3(x, 0, z);
-  // みんながいる区画
   const cnt = new Map();
-  for (const w of g.workers.list) { if (['soldier', 'guard', 'railchief'].includes(w.role) || w.state === 'held') continue; const r = reg(w.pos, 1); if (r) cnt.set(r, (cnt.get(r) || 0) + 1); }
+  for (const w of g.workers.list) { if (['soldier', 'guard', 'railchief'].includes(w.role) || w.state === 'held') continue; const r = regionAt(N, w.pos, 1); if (r) cnt.set(r, (cnt.get(r) || 0) + 1); }
   let M = 0, best = -1; for (const [r, n] of cnt) if (n > best) { best = n; M = r; }
   if (!M) return false;
   const workerIn = (r) => (cnt.get(r) || 0) > 0;
-  // 仕事のある所（区画と位置）
   const work = [];
   let k = 0;
   for (const s of g.unbuiltList()) { if (s.domino || g.crossBlocked(s)) continue; work.push(s); if (++k > 12) break; }
   for (const d of g.dominoes.list) if (d.slot && d.toppled && work.length < 40) work.push(d.slot);
   for (const st of (g.crossings ? g.crossings.sites : [])) if (['stairs', 'removing', 'inspect'].includes(st.state)) work.push(st.center);
   const plan = g.railPlans && g.railPlans.active();
-  if (plan) { const li = 0, pc = plan.lines[li].pieces[Math.min(plan.laid[li], plan.lines[li].pieces.length - 1)]; work.push({ x: pc.mid.x, z: pc.mid.z, yaw: 0, plan: true }); }
+  if (plan) { const pc = plan.lines[0].pieces[Math.min(plan.laid[0], plan.lines[0].pieces.length - 1)]; work.push({ x: pc.mid.x, z: pc.mid.z, yaw: 0, plan: true }); }
   let target = null;
-  // 長く立ち往生している人（設計主任・建築士なども）が、みんなと別の区画に閉じこめられている
+  // 長く立ち往生している人が、行き先と別の区画にいる（本当に行けない）
   for (const w of g.workers.list) {
     if ((w.stuckT || 0) < 3) continue;
-    const r = reg(w.pos, 1);
+    const r = regionAt(N, w.pos, 1);
     if (r && r !== M) { target = { p: w.pos.clone(), regs: [r] }; break; }
-    // みんなと同じ区画にいるが、行き先が列の向こう：その人の区画から行き先の区画へ
-    const tg = w.targetFn ? w.targetFn() : null, r2 = tg ? reg(tg, 4) : 0;
+    const tg = w.targetFn ? w.targetFn() : null, r2 = tg ? regionAt(N, tg, 4) : 0;
     if (r && r2 && r2 !== r) { target = { p: tg.clone(), regs: [r2] }; M = r; break; }
   }
   if (!target) for (const w of work) {
-    const sides = w.plan ? [reg(V3(w.x, w.z), 4)] : [reg(g.sideOf(w, 0.9, V3(0, 0)), 1), reg(g.sideOf(w, -0.9, V3(0, 0)), 1)];
-    if (sides.some((r) => r === M || (r && workerIn(r)))) continue; // だれかが行ける
+    const sides = w.plan ? [regionAt(N, V3(w.x, w.z), 4)] : [regionAt(N, g.sideOf(w, 0.9, V3(0, 0)), 1), regionAt(N, g.sideOf(w, -0.9, V3(0, 0)), 1)];
+    if (sides.some((r) => r === M || (r && workerIn(r)))) continue; // だれかが行ける（回りこめば行ける）
     target = { p: V3(w.x, w.z), regs: sides.filter((r) => r) };
     break;
   }
-  if (!target) return detourBridge(g, made);
-  // みんなの区画と隣り合う別の区画の境目（立っているドミノの列）で、仕事に一番近い所に架ける
+  if (!target) return detourOrder(g);
+  if (g.placed.filter((p) => p.type === 'plank').length >= 6) return false;
+  // みんなの区画と、仕事のある区画の境目（立っているドミノの列）で、仕事に一番近い所
   let pick = null, pd = Infinity;
   for (const s of g.course.allSlots) {
     if (!s.domino || s.domino.toppled || (s.site && s.site.state !== 'open') || s.y > 0.05) continue;
-    const a = reg(g.sideOf(s, 1.9, V3(0, 0)), 1), b = reg(g.sideOf(s, -1.9, V3(0, 0)), 1);
+    const a = regionAt(N, g.sideOf(s, 1.9, V3(0, 0)), 1), b = regionAt(N, g.sideOf(s, -1.9, V3(0, 0)), 1);
     if (!a || !b || a === b || (a !== M && b !== M)) continue;
     const other = a === M ? b : a;
     const d = Math.hypot(s.x - target.p.x, s.z - target.p.z) * (target.regs.includes(other) ? 0.5 : 1);
-    if (d < pd && g.canPlacePiece('footbridge', s.x, s.z, s.yaw, true).ok) { pd = d; pick = s; }
+    if (d < pd && canPlaceWalkway(g, s.x, s.z, s.yaw)) { pd = d; pick = s; }
   }
   if (!pick) return false;
-  const p = g.placePiece('footbridge', pick.x, pick.z, pick.yaw, true, true);
-  if (!p) return false;
-  p.auto = true;
-  p.mesh.scale.y = 0.05; (g.growMeshes ||= []).push(p.mesh);
-  g.stats.autoBridges = (g.stats.autoBridges || 0) + 1;
-  const chief = g.workers.list.find((w) => w.role === 'chief') || g.workers.list.find((w) => w.role === 'architect') || g.workers.list.find((w) => w.role === 'builder');
-  if (chief) chief.say('ここは列で囲まれて通れないな…歩道橋を架けよう！', 'coin');
-  g.fx.confetti && g.fx.confetti(new THREE.Vector3(pick.x, 2.4, pick.z), 20, 3);
+  orderWalkway(g, 'plank', pick, M);
   return true;
 }
 
-/** 遠回りがよく起きる所（同じあたりで3回以上）に、列をまたぐ歩道橋を架ける */
-function detourBridge(g, made) {
-  const N = g.nav, list = (N.detours || []).filter((d) => g.time - d.t < 60);
+/** 遠回りがひどい所（同じあたりで3回以上）：エリート建築士がいれば歩道橋を注文する（いなければ回りこむ） */
+function detourOrder(g) {
+  const N = g.nav;
+  if (!(g.level('architect') >= 1) || !g.workers.list.some((w) => w.role === 'architect')) return false;
+  if (g.placed.filter((p) => p.type === 'footbridge' && p.auto).length >= 4) return false;
+  const list = (N.detours || []).filter((d) => g.time - d.t < 60);
   if (list.length < 3) return false;
   const key = (d) => `${Math.round((d.a.x + d.b.x) / 16)},${Math.round((d.a.z + d.b.z) / 16)}`;
   const cnt = new Map(); for (const d of list) cnt.set(key(d), (cnt.get(key(d)) || 0) + 1);
   let bk = null, bn = 0; for (const [k, n] of cnt) if (n > bn) { bn = n; bk = k; }
   if (bn < 3) return false;
   const d = list.filter((x) => key(x) === bk).pop();
-  // まっすぐな線の上で最初にぶつかる、立っているドミノのマス
+  N.detours = list.filter((x) => key(x) !== bk);
   let pick = null;
   const L = d.a.distanceTo(d.b);
   for (let t = 0.3; t < L && !pick; t += 0.3) {
@@ -182,17 +210,68 @@ function detourBridge(g, made) {
     for (const dm of g.dominoes.near(x, z)) {
       const s = dm.slot; if (!s || dm.toppled || (s.site && s.site.state !== 'open') || s.y > 0.05) continue;
       if (Math.hypot(s.x - x, s.z - z) > 0.6) continue;
-      if (g.placed.some((p) => p.type === 'footbridge' && Math.hypot(p.x - s.x, p.z - s.z) < 7)) { N.detours = list.filter((x2) => key(x2) !== bk); return false; }
+      if (g.placed.some((p) => (p.type === 'footbridge' || p.type === 'plank') && Math.hypot(p.x - s.x, p.z - s.z) < 7)) return false;
       if (g.canPlacePiece('footbridge', s.x, s.z, s.yaw, true).ok) { pick = s; break; }
     }
   }
-  N.detours = list.filter((x) => key(x) !== bk);
   if (!pick) return false;
-  const p = g.placePiece('footbridge', pick.x, pick.z, pick.yaw, true, true);
-  if (!p) return false;
-  p.auto = true; p.mesh.scale.y = 0.05; (g.growMeshes ||= []).push(p.mesh);
-  g.stats.autoBridges = (g.stats.autoBridges || 0) + 1; g.stats.detourBridges = (g.stats.detourBridges || 0) + 1;
-  const chief = g.workers.list.find((w) => w.role === 'chief') || g.workers.list.find((w) => w.role === 'builder');
-  if (chief) chief.say('ここは遠回りだな…歩道橋を架けよう！', 'coin');
+  orderWalkway(g, 'footbridge', pick, regionAt(N, d.a, 2));
   return true;
+}
+
+/** 通路の注文：現場に「工事中」の骨組みを置き、作業員が来て組み立てる */
+export function orderWalkway(g, kind, slot, region) {
+  const job = { kind, slot, x: slot.x, z: slot.z, yaw: slot.yaw, region, claim: 0, progress: 0, done: false, t: g.time };
+  const ghost = kind === 'plank' ? plankMesh() : footbridgeGhost();
+  ghost.position.set(slot.x, 0, slot.z); ghost.rotation.y = slot.yaw;
+  ghost.traverse((o) => { if (o.isMesh) { o.material = o.material.clone(); o.material.transparent = true; o.material.opacity = 0.28; o.material.depthWrite = false; o.castShadow = false; } });
+  ghost.scale.y = 0.15;
+  g.scene.add(ghost); job.ghost = ghost;
+  (g.walkJobs ||= []).push(job);
+  g.stats.walkwayOrders = (g.stats.walkwayOrders || 0) + 1;
+  const boss = g.workers.list.find((w) => w.role === 'chief') || g.workers.list.find((w) => w.role === 'builder');
+  if (boss) boss.say(kind === 'plank' ? 'ここは列で囲まれて行けないな…踏み板を渡そう！' : 'ここは遠回りだな。エリート、歩道橋を頼む！', 'coin');
+}
+function footbridgeGhost() { return footbridgeMesh(7.5, 2.0); }
+
+/**
+ * 通路の工事を受け持つ（踏み板＝建設担当、歩道橋＝エリート建築士）。true なら受け持った。
+ * 現場の横（みんなの区画の側）へ歩いて行き、しゃがんで組み立てる。骨組みが少しずつ本物になる
+ */
+export function thinkWalkway(w, g) {
+  const jobs = g.walkJobs; if (!jobs || g.mode !== 'build') return false;
+  const job = jobs.find((j) => !j.done && (j.kind === 'plank' ? w.role === 'builder' : w.role === 'architect') && (!j.claim || j.claim === w.id || g.time - (j.claimT || 0) > 30));
+  if (!job) return false;
+  const V = new THREE.Vector3();
+  let side = 0;
+  for (const sd of [3.3, -3.3, 2.6, -2.6]) { g.sideOf(job.slot, sd, V); if (g.nav.reachable(w.pos, V, 2)) { side = sd; break; } }
+  if (!side) return false;
+  job.claim = w.id; job.claimT = g.time;
+  w.releaseJob();
+  const at = g.sideOf(job.slot, side, new THREE.Vector3());
+  if (job.kind === 'plank' && !job.said) { job.said = true; w.say('踏み板、組み立てます！'); }
+  if (job.kind === 'footbridge' && !job.said) { job.said = true; w.say('歩道橋、お任せを！'); }
+  const step = () => {
+    if (job.done || job.claim !== w.id || g.mode !== 'build') return w.think();
+    w.face2(new THREE.Vector3(job.x, 0, job.z));
+    w.act(1.0, 'place', () => {
+      job.progress = Math.min(1, job.progress + (job.kind === 'plank' ? 0.2 : 0.12));
+      job.ghost.scale.y = 0.15 + 0.85 * job.progress;
+      job.ghost.traverse((o) => { if (o.isMesh) o.material.opacity = 0.28 + 0.6 * job.progress; });
+      g.audio.click && g.audio.click(0.8);
+      if (job.progress < 1) return step();
+      finishWalkway(g, job);
+      w.say(job.kind === 'plank' ? '踏み板、できた！ 向こうへ渡れるよ' : '歩道橋、完成！', 'coin');
+      w.act(0.6, 'cheer', () => w.think());
+    });
+  };
+  w.goto(() => at, step, 1.2);
+  return true;
+}
+function finishWalkway(g, job) {
+  job.done = true;
+  g.scene.remove(job.ghost);
+  g.addWalkway(job.kind, job.x, job.z, job.yaw);
+  g.stats.autoBridges = (g.stats.autoBridges || 0) + 1;
+  g.navDirty = true;
 }

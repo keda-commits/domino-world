@@ -157,12 +157,12 @@ export class NavGrid {
    */
   path(from, to, clearance = 0, maxNodes = Math.max(30000, Math.round(this.w * this.h * 0.7))) {
     const s0 = this.idx(from.x, from.z);
-    const s = clearance === 0 && s0 >= 0 && !this.blockedK(s0) ? s0 : this.nearestFree(from, clearance, 6);
+    const s = clearance === 0 && s0 >= 0 && !this.blockedK(s0) ? s0 : this.nearestFree(from, clearance, 12); // 大きな物（おもちゃ箱など）のそばに立っていても、少し離れた通れるマスから
     this.lastCrossings = 0;
-    if (s < 0) return null;
+    if (s < 0) { this.lastFail = 'noStart'; return null; }
     // 人（clearance 0）：行き先は、自分と同じつながった範囲の中で一番近いマス。範囲が違えば（列の向こう側）すぐ「道なし」
     const g = this.nearestFree(to, clearance, 10, clearance === 0 && this.version > 0 ? this.region[s] : 0);
-    if (g < 0) return null;
+    if (g < 0) { this.lastFail = 'unreachable'; return null; }
     // 同じ範囲にあると分かっている（必ず道がある）：遠回りの長い道でも最後まで探す
     if (clearance === 0 && this.region[s] && this.region[s] === this.region[g]) maxNodes = Math.max(maxNodes, this.w * this.h);
     if (s === g) return [to.clone()];
@@ -177,7 +177,7 @@ export class NavGrid {
       if (k === g) break;
       if (closed[k]) continue;
       closed[k] = 1;
-      if (++n > maxNodes) return null;
+      if (++n > maxNodes) { this.lastFail = 'nodeLimit'; return null; }
       const i = k % W, j = (k / W) | 0, ck = cost.get(k);
       for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
         if (!di && !dj) continue;
@@ -195,7 +195,7 @@ export class NavGrid {
         }
       }
     }
-    if (!prev.has(g)) return null;
+    if (!prev.has(g)) { this.lastFail = 'noRoute'; return null; }
     const cells = []; for (let k = g; k !== s; k = prev.get(k)) cells.push(k); cells.reverse();
     this.lastCrossings = cells.filter((k) => this.isCrossing(k)).length;
     // 遠回りの記録（まっすぐなら近いのに、列を回りこんで何倍も歩く道）。設計主任が歩道橋を架ける場所を選ぶのに使う
@@ -240,7 +240,7 @@ export class PathFollower {
       nav.budget = (nav.budget ?? 1) - 1;
       this.goal = goal.clone(); this.t = time; this.ver = nav.version;
       this.pts = nav.path(pos, goal, this.clearance, this.clearance >= 2 ? 20000 : undefined);
-      if (!this.pts) { this.fail++; this.failT = time; return null; }
+      if (!this.pts) { this.fail++; this.failT = time; this.lastFail = nav.lastFail; const m = nav.game.metrics; if (m) m.add(m.pathFail, nav.lastFail || '?', 1); return null; }
       this.fail = 0; this.failT = null;
     }
     while (this.pts.length > 1 && pos.distanceTo(this.pts[0]) < 0.35) this.pts.shift();

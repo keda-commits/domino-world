@@ -1,4 +1,5 @@
 import { PARTS, EVOLUTIONS } from './data/parts.js';
+import { orderWalkway } from './game/chief.js';
 
 /**
  * テスト用デバッグメニュー（一般プレイヤーには非表示）。
@@ -215,6 +216,8 @@ export function installDebug(ctx) {
       return { log, time: Math.round(g.time - t0), level: g.progress.level, parts: { ...g.progress.parts }, evo: { ...g.progress.evolutions }, best: g.records[g.stageId].best, cleared: g.records[g.stageId].cleared, runs };
     },
     wipe: () => ctx.reset(),
+    metrics: () => game.metrics && game.metrics.snapshot(),
+    orderWalkway: (kind, slot) => orderWalkway(game, kind, slot, 0),
   };
   window.__dbg = api; Object.defineProperty(api, "ctx", { value: ctx, enumerable: false });
 

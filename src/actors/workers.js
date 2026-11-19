@@ -3,7 +3,7 @@ import { PathFollower } from '../game/nav.js';
 const REACH = 1.6; // 復旧係のマジックハンドが届く距離
 import { CFG } from '../config.js';
 import { buildGnome, looseMats } from './gnomeModel.js';
-import { chiefRoutine } from '../game/chief.js';
+import { chiefRoutine, thinkWalkway } from '../game/chief.js';
 
 const tmp = new THREE.Vector3();
 const looseGeo = new THREE.BoxGeometry(CFG.dominoW, CFG.dominoT, CFG.dominoH);
@@ -203,7 +203,7 @@ export class Gnome {
       case 'guard': return this.thinkGuard();
       case 'soldier': return this.thinkSoldier();
       case 'chief': if (g.crossings && g.crossings.thinkChief(this)) return; if (chiefRoutine(this, g)) return; break;
-      case 'architect': if (g.crossings && g.crossings.thinkArchitect(this)) return; break;
+      case 'architect': if (g.crossings && g.crossings.thinkArchitect(this)) return; if (thinkWalkway(this, g)) return; break;
       case 'wrecker': if (g.crossings && g.crossings.thinkWrecker(this)) return; break;
       case 'railcrew': if (this.atSite) return this.act(0.5, 'idle', () => {}); if (!this.busy && g.railPlans && g.railPlans.thinkCrew(this)) return; break;
       case 'railchief': if (g.railPlans && g.railPlans.thinkRailChief(this)) return; break;
@@ -220,6 +220,15 @@ export class Gnome {
   // ---------- 建設小人 ----------
   thinkBuilder() {
     const g = this.game;
+    // 通路（踏み板）の工事を頼まれていれば、先に組み立てる
+    if (thinkWalkway(this, g)) return;
+    // 大事故の立て直し中：建設より先に、倒れたドミノを手前から起こす（運んでいるドミノは持ったまま）
+    if (g.recovery && g.recovery.helpers.has(this.id)) {
+      const rd = g.findRestandJob(this, Infinity);
+      if (rd) return this.doRestand(rd);
+      const cl = g.findClearJob(this);
+      if (cl) return this.doClear(cl);
+    }
     // 倒れたドミノの立て直し（建設がない時も）
     if (this.load === 0) {
       const cl = g.findClearJob(this);
@@ -242,6 +251,7 @@ export class Gnome {
     }
     const slot = g.findBuildJob(this);
     if (!slot) {
+      if (g.metrics && g.unbuiltCount() > 0) g.metrics.count('buildNoJob');
       if (g.unbuiltCount() === 0) { g.returnToStock(this.load); this.load = 0; }
       // 並べられるマスがない（線路待ち・列の向こう）：その間に、倒れているドミノを起こしに行く
       const rd = g.findRestandJob(this, Infinity);
@@ -255,6 +265,7 @@ export class Gnome {
       // マスの上に仲間が立っている：置くとぶつかるので、どくまで待つ
       const blocker = g.workers.list.find((o) => o !== this && o.state !== 'held' && Math.hypot(o.pos.x - slot.x, o.pos.z - slot.z) < CFG.gnomeR + 0.42);
       if (blocker) {
+        if (g.metrics) g.metrics.count('slotByGnome');
         if (!this._waitSay || g.time - this._waitSay > 6) { this._waitSay = g.time; this.say('ちょっとどいて〜'); }
         // どいてもらう：立ち止まっている・休んでいる・立ち往生している人は、列の横へ一歩よける
         if (!blocker.haul && !blocker.forcing && blocker.state !== 'trip' && blocker.state !== 'hauled' && (blocker.state === 'act' || (blocker.stuckT || 0) > 0.3 || !blocker.walking)) {
@@ -297,7 +308,9 @@ export class Gnome {
     const restorer = this.role === 'restorer';
     const fast = restorer ? (g.evolved('stopperHQ') ? 3.0 : 2.0) : 1;
     const slot = d.slot;
+    const jobT = g.time, jobFrom = this.pos.clone();
     const work = () => {
+      if (g.metrics) { g.metrics.push(g.metrics.arrive, g.time - jobT); if (g.time - jobT > 90 && (g.metrics.longArrive ||= []).length < 12) g.metrics.longArrive.push({ t: Math.round(g.time), role: this.role, sec: Math.round(g.time - jobT), from: [+jobFrom.x.toFixed(1), +jobFrom.z.toFixed(1)], to: [+slot.x.toFixed(1), +slot.z.toFixed(1)], straight: +Math.hypot(slot.x - jobFrom.x, slot.z - jobFrom.z).toFixed(1) }); }
       if (d.removed || d.claim !== this.id || d.held || !d.slot) { this.releaseJob(); return this.think(); }
       this.face(d.slot);
       // 復旧係はマジックハンドを伸ばして起こす（回収担当はしゃがんで手で起こす）
@@ -616,10 +629,38 @@ export class Gnome {
     if (this.stuckT > 6) {
       this.stuckT = 0; this._stuckSaid = false; this._stuckRep = false;
       this.game.stats.stuckGiveUps = (this.game.stats.stuckGiveUps || 0) + 1;
+      // たどり着けなかった仕事は、しばらく別の人にまかせる（同じ人を何度も送らない）
+      this.game.markJobFail(this.job, this);
       if (this.job && this.job.slot === undefined && this.job.order !== undefined) this.side = -this.side; // 建設のマス：反対側から
       this.releaseJob();
       this.act(1.0 + Math.random(), 'shrug', () => this.think());
     }
+  }
+  /** 倒れたドミノに囲まれて動けない：一番近い倒れたドミノを、手で起こすか拾う（実際にしゃがんで作業する） */
+  selfRescue() {
+    const g = this.game;
+    let best = null, bd = 1.8 * 1.8;
+    for (const d of g.dominoes.near(this.pos.x, this.pos.z)) {
+      if (d.held || d.removed || !(d.toppled || !d.slot)) continue;
+      const t = d.body.translation(), dd = (t.x - this.pos.x) ** 2 + (t.z - this.pos.z) ** 2;
+      if (dd < bd) { bd = dd; best = d; }
+    }
+    if (!best) return false;
+    const target = this.onArrive, tf = this.targetFn;
+    g.stats.selfRescues = (g.stats.selfRescues || 0) + 1;
+    if (!this._rescueSaid || g.time - this._rescueSaid > 8) { this._rescueSaid = g.time; this.say('足元を片付けないと…'); }
+    const t = best.body.translation(); this.face2({ x: t.x, z: t.z });
+    this.act(0.6, 'pick', () => {
+      if (!best.removed && !best.held) {
+        const sl = best.slot;
+        if (sl && (t.x - sl.x) ** 2 + (t.z - sl.z) ** 2 <= CFG.restandDistance ** 2 && !g.slotBlocker(sl, best)) g.restand(best);
+        else g.clearBlocker(best);
+      }
+      if (this.pf) this.pf.reset();
+      g.nav && (g.nav.dynT = -1);
+      this.goto(tf, target); // もとの行き先へ
+    });
+    return true;
   }
   /** 横着な小人：遠回りしかない・道がないとき、ときどき列を無理やり横切る（体が当たったドミノは物理で倒れる） */
   maybeForce(d) {
@@ -659,6 +700,22 @@ export class Gnome {
           if (this.pf) this.pf.reset();
           if (cb) cb(); else this.state = 'idle';
         } else {
+          // 近づけていない（その場でうろうろ・行ったり来たり）：3秒たっても0.3以上近づいていなければ、
+          // 目的地まで2以内なら「手が届く所に着いた」ことにする。遠ければ立ち往生として扱う
+          // （遠回りで目的地から一時的に遠ざかるのは正常。3秒でほとんど位置が変わっていない時だけ「近づけていない」とみなす）
+          if (this._goalRef !== tgt || this._bestD == null) { this._goalRef = tgt; this._bestD = d; this._bestT = g.time; (this._progP ||= new THREE.Vector3()).copy(this.pos); }
+          if (d < this._bestD - 0.3 || this.pos.distanceTo(this._progP) > 0.8) { this._bestD = Math.min(d, this._bestD); this._bestT = g.time; this._progP.copy(this.pos); this._noProg = 0; }
+          else if (g.time - this._bestT > 3) {
+            this._bestT = g.time; this._bestD = d; this._progP.copy(this.pos);
+            if (d < 2.0) { this._noProg = 0; if (g.metrics) g.metrics.count('nearArrive'); this.arriveDist = 0; const cb = this.onArrive; this.onArrive = null; this.runMult = 1; if (this.pf) this.pf.reset(); if (cb) cb(); else this.state = 'idle'; break; }
+            this._noProg = (this._noProg || 0) + 1; if (g.metrics) g.metrics.count('noProgress');
+            if (this.pf) this.pf.reset();
+            // 12秒近づけない（遠くでうろうろ）：仕事を手放して、別の人にまかせる
+            if (this._noProg >= 4) {
+              this._noProg = 0; g.stats.stuckGiveUps = (g.stats.stuckGiveUps || 0) + 1; if (g.metrics) g.metrics.count('noProgressGiveUp');
+              g.markJobFail(this.job, this); this.releaseJob(); this.act(0.8, 'shrug', () => this.think()); break;
+            }
+          }
           // ドミノの列・家具をよけて歩く（目的地のすぐ近くだけ直進）。Ver.0.6：列はまたがない。道がなければ待つ
           let sx = dx, sz = dz, sd = d;
           if (g.nav && d > 1.5 && !this.forcing) {
@@ -666,6 +723,8 @@ export class Gnome {
             const wp = this.pf.next(g.nav, this.pos, tgt, g.time);
             if (wp) { sx = wp.x - this.pos.x; sz = wp.z - this.pos.z; sd = Math.hypot(sx, sz) || 1; }
             else {
+              // 倒れたドミノに囲まれて、足元から動けない：まわりの倒れたドミノを拾って（起こして）道を作る
+              if (this.pf.lastFail === 'noStart' && this.selfRescue()) break;
               // 道がない（列の向こう側）。横着な小人はときどき無理やり通ろうとする（体が当たれば本当に倒れる）
               if (this.pf.fail >= 1 && this.maybeForce(d)) break;
               this.stall(dt, d); break;
@@ -699,6 +758,7 @@ export class Gnome {
           }
           this.stuckT = 0;
           this.pos.x += mx; this.pos.z += mz;
+          if (g.metrics) g.metrics.add(g.metrics.dist, this.role, Math.hypot(mx, mz));
           sx = mx; sz = mz;
           this.turnTo(Math.atan2(sx, sz), dt);
           this.walking = true;
