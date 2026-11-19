@@ -898,6 +898,8 @@ export class Game {
       const b = this.slotBlocker(d.slot, d);
       if (!b) return false;
       if (b.slot && b.slot !== d.slot && this.slotBlocker(b.slot, b) === d) return this.ord(d.slot) > this.ord(b.slot);
+      // 上に寝ているのが、倒れた別のマスのドミノ：それをどけてから起こせる（3枚以上が互いに重なっても止まらない）
+      if (b.slot && b.toppled && !b.held && !b.claim) return false;
       return true;
     };
     for (const d of this.dominoes.list) {
@@ -947,7 +949,7 @@ export class Game {
     const b = this.slotBlocker(slot, d);
     if (b) {
       // 2枚がお互いのマスの上に寝ている（どちらも起こせない）：もう1枚を拾い上げてから起こす。拾った分は在庫へ、マスは空きになる
-      if (b.slot && b.slot !== slot && !b.held && !b.removed && this.slotBlocker(b.slot, b) === d) {
+      if (b.slot && b.slot !== slot && !b.held && !b.removed && (this.slotBlocker(b.slot, b) === d || (b.toppled && !b.claim))) {
         const bs = b.slot; this.dominoes.remove(b); if (bs.domino === b) bs.domino = null; this.stock++; this.unbuiltDirty = true;
         this.stats.untangled = (this.stats.untangled || 0) + 1;
         if (this.slotBlocker(slot, d)) { d.restandFailAt = this.time; return null; }
@@ -1476,6 +1478,8 @@ export class Game {
     let fallen = 0, from = Infinity, oldest = 0;
     for (const d of this.dominoes.list) {
       if (!d.slot || d.held || d.removed) continue;
+      // 建設中の事故で倒れたものだけ（本番で倒れたドミノの立て直しは、ふだんの作業）
+      if (d._runFell) continue;
       if (d.toppled || !this.dominoes.isStandingAt(d, d.slot)) {
         fallen++; if (d.slot.order >= 0 && d.slot.order < from) from = d.slot.order;
         if (!d.claim) { if (d._waitT == null) d._waitT = this.time; oldest = Math.max(oldest, this.time - d._waitT); } else d._waitT = null;
@@ -1610,6 +1614,7 @@ export class Game {
     return false;
   }
   runTopple(d) {
+    d._runFell = true; // 本番で倒れた（立て直しは、ふだんの作業。大事故の扱いにしない）
     const run = this.run;
     if (!run || run.toppled.has(d) || run.rogue.has(d)) return;
     if (!d.slot) return;
