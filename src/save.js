@@ -1,7 +1,9 @@
 // localStorage セーブ。v0.3 は新しいキー。v0.2・v0.1 のセーブは読み込みはするが、消したり上書きしたりしない。
 // プレビュー版（開発ブランチの試遊用ビルド）は別のキーに保存する：本編のセーブを読まない・書かない
 export const PREVIEW = import.meta.env.VITE_SAVE_SUFFIX || '';
-const KEY = 'domino-world-save-v3' + PREVIEW;
+// プレビュー版の「ステージ2から試す」（?start=s2）は、ステージ1から遊ぶセーブとも分ける
+export const PREVIEW_S2 = !!PREVIEW && typeof location !== 'undefined' && new URLSearchParams(location.search).get('start') === 's2';
+const KEY = 'domino-world-save-v3' + PREVIEW + (PREVIEW_S2 ? '-s2' : '');
 const V2 = PREVIEW ? '__no_v2_in_preview__' : 'domino-world-save-v2';
 const SETTINGS = 'domino-world-settings-v3' + PREVIEW;
 const OLD_SETTINGS = 'domino-world-settings-v2';

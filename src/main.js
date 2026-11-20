@@ -69,11 +69,15 @@ if (PREVIEW && !loaded.data && new URLSearchParams(location.search).get('start')
 }
 game.loadStage(startStage, stageSaves[startStage]);
 if (PREVIEW) {
+  // 画面下の帯：開発プレビューであること、モードの切り替え（どちらも本編とは別のセーブ）
   const b = document.createElement('div');
-  b.textContent = 'プレビュー版 v0.6（開発中・本編のセーブとは別）';
-  b.style.cssText = 'position:fixed;left:50%;bottom:2px;transform:translateX(-50%);background:#c92a2a;color:#fff;font:bold 11px sans-serif;padding:2px 8px;border-radius:6px;z-index:50;pointer-events:none;opacity:.85';
+  const s2 = new URLSearchParams(location.search).get('start') === 's2';
+  const base = location.pathname;
+  b.innerHTML = `Ver.0.6 開発プレビュー（本編とは別のセーブ）　｜　${s2 ? `<a href="${base}">ステージ1から遊ぶ</a>　／　<b>ステージ2から試す中</b>` : `<b>ステージ1から遊ぶ中</b>　／　<a href="${base}?start=s2">ステージ2から試す</a>`}`;
+  b.style.cssText = 'position:fixed;left:50%;bottom:2px;transform:translateX(-50%);background:#c92a2a;color:#fff;font:bold 11px sans-serif;padding:2px 10px;border-radius:6px;z-index:50;opacity:.9;white-space:nowrap';
+  b.querySelectorAll('a').forEach((a) => { a.style.color = '#ffe066'; });
   document.body.appendChild(b);
-  document.title = '【プレビュー v0.6】' + document.title;
+  document.title = '【Ver.0.6 開発プレビュー】' + document.title;
 }
 
 function placeGachaMachine() {
